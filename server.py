@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+"""Local session board: live sessions + summaries, Slack items, time boxes, jump-to-terminal.
+Usage: server.py [--port 8765] [--days 14]"""
+import argparse
+import datetime as dt
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+from sessions_digest import PROJECTS, SKIP_DIR_MARKERS, digest
+
+HERE = Path(__file__).resolve().parent
+STATE = HERE / "state.json"
+SUMMARIES = HERE / "summaries.json"
+SLACK = HERE / "slack.json"
+LIVE_DIR = Path.home() / ".claude" / "sessions"
+UUID = re.compile(r"^[0-9a-f-]{36}$")
+CLAUDE = shutil.which("claude") or "claude"
+
+_cache = {}  # transcript path -> (mtime, digest)
+_latest = {}  # session_id -> digest, from the most recent scan
+_lock = threading.Lock()
+
+
+def read_json(path, default):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return default
+
+
+_summaries = read_json(SUMMARIES, {})
+
+
+def live_sessions():
+    """Map session id -> {pid, status, tty} for claude processes that are still running."""
+    out = {}
+    for f in LIVE_DIR.glob("*.json"):
+        d = read_json(f, None)
+        if not d or d.get("kind") != "interactive":
+            continue
+        try:
+            os.kill(d["pid"], 0)
+        except (OSError, KeyError):
+            continue
+        tty = subprocess.run(["ps", "-o", "tty=", "-p", str(d["pid"])],
+                             capture_output=True, text=True).stdout.strip()
+        out[d["sessionId"]] = {"pid": d["pid"], "status": d.get("status"),
+                               "tty": f"/dev/{tty}" if tty and tty != "??" else None}
+    return out
+
+
+def sessions(days):
+    cutoff = time.time() - days * 86400
+    live = live_sessions()
+    out = []
+    for proj in PROJECTS.iterdir():
+        if not proj.is_dir() or any(m in proj.name for m in SKIP_DIR_MARKERS):
+            continue
+        for p in proj.glob("*.jsonl"):
+            m = p.stat().st_mtime
+            if m < cutoff and p.stem not in live:
+                continue
+            hit = _cache.get(p)
+            if not hit or hit[0] != m:
+                hit = _cache[p] = (m, digest(p))
+            if hit[1]:
+                s = dict(hit[1])
+                s["live"] = live.get(s["session_id"])
+                s["ai"] = _summaries.get(s["session_id"])
+                out.append(s)
+    out.sort(key=lambda d: d["active_at"], reverse=True)
+    with _lock:
+        _latest.clear()
+        _latest.update({s["session_id"]: s for s in out})
+    return out
+
+
+SUMMARY_VERSION = 2
+SUMMARY_SCHEMA = json.dumps({
+    "type": "object",
+    "properties": {
+        "headline": {"type": "string"},
+        "summary": {"type": "string"},
+        "category": {"type": "string", "enum": ["critical_blocking", "bug_fixing", "map_of_work", "other"]},
+        "waiting_on": {"type": "string", "enum": ["you", "claude", "ci_or_review", "someone_else", "nothing"]},
+        "next_step": {"type": "string"},
+    },
+    "required": ["headline", "summary", "category", "waiting_on", "next_step"],
+})
+
+
+def summarize(s):
+    payload = {k: s[k] for k in ("title", "repo", "branch", "first_ask", "recent_asks", "last_reply")}
+    payload["prs"] = s["prs"][-3:]
+    prompt = ("headline: what this work is, 5 words or fewer, no filler. "
+              "summary: 1-2 plain sentences on what the work is and where it stands now. "
+              "category: critical_blocking = a customer, prod issue, release or teammate is blocked on it; "
+              "bug_fixing = iterative debugging, fixing bugs, CI failures or review-comment loops; "
+              "map_of_work = planning, architecture, design docs, scoping, or multi-repo feature building; "
+              "other = tooling, config, one-off questions. "
+              "waiting_on: who must act next (you = the engineer). "
+              "next_step: the one concrete next action, under 15 words. Session data: " + json.dumps(payload))
+    r = subprocess.run(
+        [CLAUDE, "-p", "--model", "haiku", "--tools", "", "--strict-mcp-config", "--disable-slash-commands",
+         "--no-session-persistence", "--settings", '{"disableAllHooks":true}',
+         "--system-prompt", "You summarize Claude Code sessions for a busy engineer. Plain English, short.",
+         "--output-format", "json", "--json-schema", SUMMARY_SCHEMA, prompt],
+        capture_output=True, text=True, timeout=180, cwd=HERE,
+    )
+    out = json.loads(r.stdout).get("structured_output")
+    if not out:
+        raise RuntimeError(r.stdout[-300:] or r.stderr[-300:])
+    return out
+
+
+def summary_worker():
+    while True:
+        with _lock:
+            due = [s for s in _latest.values()
+                   if (s.get("live") or {}).get("status") != "busy"
+                   and ((_summaries.get(s["session_id"]) or {}).get("active_at", 0) < s["active_at"]
+                        or (_summaries.get(s["session_id"]) or {}).get("v") != SUMMARY_VERSION)]
+        due.sort(key=lambda s: s["active_at"], reverse=True)
+        for s in due[:6]:
+            try:
+                out = summarize(s)
+                _summaries[s["session_id"]] = {**out, "active_at": s["active_at"], "at": time.time(),
+                                               "v": SUMMARY_VERSION}
+                SUMMARIES.write_text(json.dumps(_summaries, indent=1))
+            except Exception as e:  # keep the worker alive; retry on the next pass
+                print("summary failed", s["session_id"], e, flush=True)
+                _summaries.setdefault(s["session_id"], {}).update(active_at=s["active_at"], v=SUMMARY_VERSION)
+        time.sleep(15)
+
+
+def osascript(lines, *args):
+    cmd = ["osascript"]
+    for line in lines:
+        cmd += ["-e", line]
+    return subprocess.run(cmd + list(args), capture_output=True, text=True, timeout=20)
+
+
+FOCUS_TAB = [
+    "on run argv",
+    'tell application "Terminal"',
+    "repeat with w in windows",
+    "repeat with t in tabs of w",
+    "if tty of t is (item 1 of argv) then",
+    "set selected of t to true",
+    "set index of w to 1",
+    "activate",
+    'return "ok"',
+    "end if",
+    "end repeat",
+    "end repeat",
+    "end tell",
+    'return "notfound"',
+    "end run",
+]
+OPEN_TAB = ["on run argv", 'tell application "Terminal"', "activate", "do script (item 1 of argv)", "end tell", "end run"]
+
+
+def focus(session_id):
+    if not UUID.match(session_id or ""):
+        return {"ok": False, "error": "bad id"}
+    live = live_sessions().get(session_id)
+    if live and live["tty"]:
+        r = osascript(FOCUS_TAB, live["tty"])
+        if r.stdout.strip() == "ok":
+            return {"ok": True, "action": "focused", "tty": live["tty"]}
+        if r.returncode:
+            return {"ok": False, "error": r.stderr.strip()}
+    s = _latest.get(session_id)
+    if not s:
+        return {"ok": False, "error": "session not found"}
+    cmd = f"claude --resume {session_id}"
+    if s.get("cwd") and Path(s["cwd"]).is_dir():
+        cmd = f"cd {shlex.quote(s['cwd'])} && {cmd}"
+    r = osascript(OPEN_TAB, cmd)
+    return {"ok": r.returncode == 0, "action": "opened", "error": r.stderr.strip()}
+
+
+def ics(state):
+    today = dt.date.today().isoformat()
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//timebox//EN"]
+    for b in state.get("boxes", {}).values():
+        if b.get("date", "") < today:
+            continue
+        start = dt.datetime.fromisoformat(f"{b['date']}T{b['start']}")
+        end = start + dt.timedelta(minutes=b.get("dur", 60))
+        title = re.sub(r"[\r\n]+", " ", b.get("title", "Focus"))
+        lines += ["BEGIN:VEVENT", f"UID:{b['id']}@timebox", f"DTSTAMP:{dt.datetime.now():%Y%m%dT%H%M%S}",
+                  f"DTSTART:{start:%Y%m%dT%H%M%S}", f"DTEND:{end:%Y%m%dT%H%M%S}", f"SUMMARY:{title}", "END:VEVENT"]
+    return "\r\n".join(lines + ["END:VCALENDAR"]) + "\r\n"
+
+
+class Handler(BaseHTTPRequestHandler):
+    days = 14
+    allowed_origins = set()
+
+    def origin_ok(self):
+        origin = self.headers.get("Origin")
+        return origin is None or origin in self.allowed_origins
+
+    def cors(self):
+        origin = self.headers.get("Origin")
+        if origin in self.allowed_origins:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+
+    def send(self, code, body, ctype="application/json"):
+        data = body if isinstance(body, bytes) else body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Cache-Control", "no-store")
+        self.cors()
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_OPTIONS(self):
+        if not self.origin_ok():
+            return self.send(403, "{}")
+        self.send_response(204)
+        self.cors()
+        self.send_header("Access-Control-Allow-Methods", "GET, POST")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.end_headers()
+
+    def body(self):
+        return json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+
+    def do_GET(self):
+        if not self.origin_ok():
+            self.send(403, "{}")
+        elif self.path in ("/", "/index.html"):
+            self.send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
+        elif self.path == "/api/sessions":
+            self.send(200, json.dumps({"now": time.time(), "sessions": sessions(self.days)}))
+        elif self.path == "/api/state":
+            self.send(200, json.dumps(read_json(STATE, {})))
+        elif self.path == "/api/slack":
+            self.send(200, json.dumps(read_json(SLACK, {"items": [], "synced_at": None})))
+        elif self.path == "/today.ics":
+            self.send(200, ics(read_json(STATE, {})), "text/calendar")
+        else:
+            self.send(404, "{}")
+
+    def do_POST(self):
+        if not self.origin_ok():
+            self.send(403, "{}")
+        elif self.path == "/api/state":
+            STATE.write_text(json.dumps(self.body(), indent=1))
+            self.send(200, "{}")
+        elif self.path == "/api/focus":
+            self.send(200, json.dumps(focus(self.body().get("session_id"))))
+        else:
+            self.send(404, "{}")
+
+    def log_message(self, *args):
+        pass
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--days", type=float, default=14)
+    ap.add_argument("--allow-origin", action="append", default=["https://dushyant-uipath.github.io"],
+                    help="extra web origin allowed to use this server (e.g. a GitHub Pages site)")
+    a = ap.parse_args()
+    Handler.days = a.days
+    Handler.allowed_origins = {f"http://localhost:{a.port}", f"http://127.0.0.1:{a.port}", *a.allow_origin}
+    sessions(a.days)
+    threading.Thread(target=summary_worker, daemon=True).start()
+    print(f"Session board on http://localhost:{a.port}", flush=True)
+    ThreadingHTTPServer(("127.0.0.1", a.port), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,8 @@
+# Personal data written at runtime
+state.json
+summaries.json
+slack.json
+board.json
+server.log
+__pycache__/
+.DS_Store
