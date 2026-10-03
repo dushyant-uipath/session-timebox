@@ -72,16 +72,33 @@ Then load it with `launchctl load ~/Library/LaunchAgents/com.session-timebox.pli
 ## To-dos and lanes
 
 - Type in **+ Add to-do** at the top of a lane and press Enter to add a card of your own.
-- Double-click a to-do title to rename it. Click a to-do to add a note, and click **Delete** twice to remove it.
-- To-dos move between lanes and onto the calendar the same way session cards do.
+- Double-click a to-do title to rename it, and click the card to add a note.
 - Double-click a lane name to rename it, and press Enter to save or Escape to cancel.
+- Drag a lane by its header to reorder lanes.
 - **+ Add lane** creates a lane. Click a lane's **×** twice to delete it; its to-dos move to Others.
 - Others and Done can be renamed but not deleted, because cards without a lane land in them.
 
+## Done and removing cards
+
+- Drag any card to **Done**, or click the **×** on the card, to mark it done and stop tracking it.
+- Done keeps cards for 24 hours with a **Restore** button, then hides them for good.
+- A refresh keeps done cards in Done, and a Slack refresh skips them because they match by message timestamp.
+- A done session comes back, tagged "new activity", only if you send it new messages after marking it done.
+- Done sessions stop getting summaries.
+
+## Subtasks
+
+- Session cards list the agent-team members working under that session, read from `<session>/subagents/*.jsonl` and their `.meta.json`, with each agent's latest assigned task.
+- A pulsing dot marks an agent active in the last 5 minutes.
+- Type in **+ subtask** on any card to add your own; tick it off or double-click to rename it.
+- Drag any subtask onto the calendar on its own.
+- The **×** on a subtask deletes your own subtasks and stops tracking agent subtasks.
+
 ## Time boxes
 
-- Drag a card onto a day and time to create a 1-hour block, snapped to 15 minutes.
+- Drag a card or subtask onto a day and time to create a 1-hour block, snapped to 15 minutes.
 - Drag a block to move it, including to another day. Drag its bottom edge to resize it.
+- Remove a block with its **×**, by selecting it and pressing Delete, or by dragging it off the calendar. Each removal shows an **Undo** button for 5 seconds.
 - Double-click empty time for a custom block, and type its title.
 - Double-click a block to jump to its session or Slack thread.
 - Drag the divider between the board and the calendar to resize the calendar. Use the Days buttons for 3, 5, or 7 days and the Zoom buttons for taller hours.
@@ -116,7 +133,9 @@ The server listens on `127.0.0.1` only and answers requests from `localhost` and
 
 | File | Contents |
 |---|---|
-| `state.json` | Lanes, to-dos, card placements, and time boxes |
+| `timebox.db` | SQLite: lanes, to-dos, subtasks, card placements, done cards, and time boxes |
 | `summaries.json` | Session summaries |
 | `slack.json` | Slack asks |
 | `server.log` | Server output |
+
+The page sends each change as a small update (`POST /api/op`, applied in one SQLite transaction by `apply_ops` in `server.py`), so two open tabs don't overwrite each other. A `state.json` from an older version is imported into `timebox.db` on first start.

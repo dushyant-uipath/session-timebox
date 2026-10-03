@@ -5,6 +5,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -97,6 +98,47 @@ def digest(path):
         "mtime": path.stat().st_mtime,
         "active_at": dt.datetime.fromisoformat(last_ts.replace("Z", "+00:00")).timestamp() if last_ts else path.stat().st_mtime,
         "resume": f"claude --resume {path.stem}",
+    }
+
+
+TASK_SUMMARY = re.compile(r'<teammate-message[^>]*summary="([^"]+)"')
+
+
+def subagent(path):
+    """One agent-team member under a session: its name, job, latest assigned task, and last reply."""
+    meta = {}
+    meta_path = path.with_name(path.name[: -len(".jsonl")] + ".meta.json")
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text())
+        except ValueError:
+            pass
+    last_ts, last_reply, task = None, "", None
+    with open(path, errors="replace") as f:
+        for line in f:
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("type") not in ("user", "assistant"):
+                continue
+            last_ts = d.get("timestamp") or last_ts
+            txt = text_of((d.get("message") or {}).get("content"))
+            if d["type"] == "user":
+                m = TASK_SUMMARY.search(txt)
+                if m:
+                    task = m.group(1)
+            elif txt.strip():
+                last_reply = txt
+    if not last_ts:
+        return None
+    return {
+        "id": path.stem[len("agent-"):] if path.stem.startswith("agent-") else path.stem,
+        "name": meta.get("name") or meta.get("agentType") or path.stem,
+        "description": meta.get("description", ""),
+        "task": task,
+        "last_reply": clip(last_reply, 400),
+        "active_at": dt.datetime.fromisoformat(last_ts.replace("Z", "+00:00")).timestamp(),
     }
 
 

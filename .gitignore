@@ -1,4 +1,5 @@
 # Personal data written at runtime
+timebox.db
 state.json
 summaries.json
 slack.json

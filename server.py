@@ -8,16 +8,18 @@ import os
 import re
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from sessions_digest import PROJECTS, SKIP_DIR_MARKERS, digest
+from sessions_digest import PROJECTS, SKIP_DIR_MARKERS, digest, subagent
 
 HERE = Path(__file__).resolve().parent
-STATE = HERE / "state.json"
+STATE = HERE / "state.json"  # pre-SQLite storage, imported once
+DB = HERE / "timebox.db"
 SUMMARIES = HERE / "summaries.json"
 SLACK = HERE / "slack.json"
 LIVE_DIR = Path.home() / ".claude" / "sessions"
@@ -25,8 +27,76 @@ UUID = re.compile(r"^[0-9a-f-]{36}$")
 CLAUDE = shutil.which("claude") or "claude"
 
 _cache = {}  # transcript path -> (mtime, digest)
+_sub_cache = {}  # subagent transcript path -> (mtime, subagent)
 _latest = {}  # session_id -> digest, from the most recent scan
 _lock = threading.Lock()
+_state_lock = threading.Lock()
+
+
+def subtasks(session_path):
+    out = []
+    for p in (session_path.parent / session_path.stem / "subagents").glob("*.jsonl"):
+        m = p.stat().st_mtime
+        hit = _sub_cache.get(p)
+        if not hit or hit[0] != m:
+            hit = _sub_cache[p] = (m, subagent(p))
+        if hit[1]:
+            out.append(hit[1])
+    return sorted(out, key=lambda a: a["active_at"], reverse=True)
+
+
+def db():
+    conn = sqlite3.connect(DB, timeout=10)
+    conn.execute("CREATE TABLE IF NOT EXISTS state (section TEXT, key TEXT, value TEXT, PRIMARY KEY (section, key))")
+    return conn
+
+
+# Create the database, importing state.json from the pre-SQLite version on first run
+def init_db():
+    with _state_lock, db() as conn:
+        if conn.execute("SELECT COUNT(*) FROM state").fetchone()[0] or not STATE.exists():
+            return
+        for section, val in read_json(STATE, {}).items():
+            rows = val.items() if isinstance(val, dict) else [("_", val)]
+            conn.executemany("INSERT OR REPLACE INTO state VALUES (?, ?, ?)",
+                             [(section, k, json.dumps(v)) for k, v in rows])
+
+
+def load_state():
+    state = {}
+    with db() as conn:
+        for section, key, value in conn.execute("SELECT section, key, value FROM state"):
+            v = json.loads(value)
+            if key == "_":
+                state[section] = v
+            else:
+                state.setdefault(section, {})[key] = v
+    return state
+
+
+# Each op is {"path": [section, key, ...], "value": v} or {"path": [...], "delete": true}.
+# One row per (section, key); a deeper path edits inside that row's JSON. All ops run in one transaction.
+def apply_ops(ops):
+    with _state_lock, db() as conn:
+        for op in ops:
+            section, *rest = op["path"]
+            key, inner = (rest[0], rest[1:]) if rest else ("_", [])
+            if not inner:
+                if op.get("delete"):
+                    conn.execute("DELETE FROM state WHERE section=? AND key=?", (section, key))
+                else:
+                    conn.execute("INSERT OR REPLACE INTO state VALUES (?, ?, ?)", (section, key, json.dumps(op["value"])))
+                continue
+            row = conn.execute("SELECT value FROM state WHERE section=? AND key=?", (section, key)).fetchone()
+            node = root = json.loads(row[0]) if row else {}
+            for k in inner[:-1]:
+                node = node.setdefault(k, {})
+            if op.get("delete"):
+                node.pop(inner[-1], None)
+            else:
+                node[inner[-1]] = op["value"]
+            conn.execute("INSERT OR REPLACE INTO state VALUES (?, ?, ?)", (section, key, json.dumps(root)))
+    return load_state()
 
 
 def read_json(path, default):
@@ -75,6 +145,7 @@ def sessions(days):
                 s = dict(hit[1])
                 s["live"] = live.get(s["session_id"])
                 s["ai"] = _summaries.get(s["session_id"])
+                s["subtasks"] = subtasks(p)
                 out.append(s)
     out.sort(key=lambda d: d["active_at"], reverse=True)
     with _lock:
@@ -123,9 +194,11 @@ def summarize(s):
 
 def summary_worker():
     while True:
+        archived = load_state().get("archived", {})
         with _lock:
             due = [s for s in _latest.values()
                    if (s.get("live") or {}).get("status") != "busy"
+                   and s["active_at"] > (archived.get("s:" + s["session_id"]) or {}).get("at", 0) + 5
                    and ((_summaries.get(s["session_id"]) or {}).get("active_at", 0) < s["active_at"]
                         or (_summaries.get(s["session_id"]) or {}).get("v") != SUMMARY_VERSION)]
         due.sort(key=lambda s: s["active_at"], reverse=True)
@@ -246,20 +319,19 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/sessions":
             self.send(200, json.dumps({"now": time.time(), "sessions": sessions(self.days)}))
         elif self.path == "/api/state":
-            self.send(200, json.dumps(read_json(STATE, {})))
+            self.send(200, json.dumps(load_state()))
         elif self.path == "/api/slack":
             self.send(200, json.dumps(read_json(SLACK, {"items": [], "synced_at": None})))
         elif self.path == "/today.ics":
-            self.send(200, ics(read_json(STATE, {})), "text/calendar")
+            self.send(200, ics(load_state()), "text/calendar")
         else:
             self.send(404, "{}")
 
     def do_POST(self):
         if not self.origin_ok():
             self.send(403, "{}")
-        elif self.path == "/api/state":
-            STATE.write_text(json.dumps(self.body(), indent=1))
-            self.send(200, "{}")
+        elif self.path == "/api/op":
+            self.send(200, json.dumps(apply_ops(self.body().get("ops", []))))
         elif self.path == "/api/focus":
             self.send(200, json.dumps(focus(self.body().get("session_id"))))
         else:
@@ -278,6 +350,7 @@ def main():
     a = ap.parse_args()
     Handler.days = a.days
     Handler.allowed_origins = {f"http://localhost:{a.port}", f"http://127.0.0.1:{a.port}", *a.allow_origin}
+    init_db()
     sessions(a.days)
     threading.Thread(target=summary_worker, daemon=True).start()
     print(f"Session board on http://localhost:{a.port}", flush=True)

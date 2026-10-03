@@ -6,7 +6,7 @@
 <title>Session Board</title>
 <style>
 :root{--bg:#f6f5f1;--col:#eeede7;--card:#fff;--ink:#2e2c27;--soft:#5f5e57;--grey:#9a998f;--line:#e1e0d8;
---accent:#c6613f;--run:#3f8f6b;--wait:#b8901a;--idle:#8a8a80;--slack:#7c4dbd;--chip:#f1f0ea;
+--accent:#c6613f;--run:#3f8f6b;--wait:#b8901a;--idle:#8a8a80;--slack:#7c4dbd;--chip:#f1f0ea;--mine:#2f8f8f;
 --crit:#c6613f;--bug:#c9a227;--map:#4d7fbd;--other:#8a8a80}
 @media (prefers-color-scheme:dark){:root{--bg:#191917;--col:#21201d;--card:#2a2926;--ink:#ecebe5;--soft:#b5b4ac;
 --grey:#77766e;--line:#373631;--chip:#33322e}}
@@ -30,58 +30,77 @@ body.resizing{cursor:col-resize;user-select:none}
 padding:2px 9px;font:500 13px -apple-system,sans-serif;cursor:pointer}
 .ctrls button.on{background:var(--ink);color:var(--card);border-color:var(--ink)}
 .ctrls span{color:var(--grey);font-size:12px;margin:0 4px 0 8px}
-.board{display:grid;grid-template-columns:repeat(4,minmax(250px,1fr)) 190px;gap:10px;padding:14px 16px;overflow:auto;align-items:start}
+.board{display:grid;gap:10px;padding:14px 16px;overflow:auto;align-items:start}
 .col{background:var(--col);border-radius:10px;padding:8px;display:flex;flex-direction:column;gap:8px;min-height:240px}
 .col.over{outline:2px dashed var(--accent);outline-offset:-4px}
+.col.lane-over{box-shadow:inset 4px 0 0 var(--accent)}
 .col h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;margin:2px 4px 2px;color:var(--ink);
-border-bottom:3px solid var(--other);padding-bottom:5px}
+border-bottom:3px solid var(--other);padding-bottom:5px;cursor:grab}
+.col[data-col=done] h2{cursor:default}
 .col[data-col=critical] h2{border-color:var(--crit)}
 .col[data-col=bugs] h2{border-color:var(--bug)}
 .col[data-col=map] h2{border-color:var(--map)}
 .col[data-col=done] h2{border-color:var(--line)}
 .col h2 small{display:block;font-weight:400;text-transform:none;letter-spacing:0;color:var(--grey);font-size:12px;margin-top:2px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px;cursor:grab}
-.card.dragging{opacity:.4}
-.card.flash{box-shadow:0 0 0 2px var(--accent)}
-.col[data-col=done] .card{opacity:.6;padding:7px 10px}
-.col[data-col=done] .card .next,.col[data-col=done] .card .tags,.col[data-col=done] .card .sub{display:none}
-.top{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-.status{font-size:11px;font-weight:600;padding:1px 7px;border-radius:10px;color:#fff;background:var(--idle);text-transform:uppercase;letter-spacing:.03em}
-.status.needs{background:var(--accent)}
-.status.running{background:var(--run)}
-.status.waiting{background:var(--wait)}
-.kind{font-size:11px;font-weight:600;padding:1px 6px;border-radius:4px;background:var(--chip);color:var(--soft)}
-.kind.slack{background:var(--slack);color:#fff}
-.kind.task{background:#2f8f8f;color:#fff}
-.status.task{background:#2f8f8f}
+.grip{color:var(--grey);margin-right:4px;font-size:12px}
 .lname{cursor:text;outline:none;border-radius:3px}
-.lname[contenteditable=true],.headline[contenteditable=true]{background:var(--card);box-shadow:0 0 0 2px var(--accent);padding:0 3px}
+.lname[contenteditable=true],.headline[contenteditable=true],.st[contenteditable=true]{background:var(--card);box-shadow:0 0 0 2px var(--accent);padding:0 3px;cursor:text}
 .count{color:var(--grey);font-weight:500}
 .lx{float:right;border:0;background:none;color:var(--grey);cursor:pointer;font-size:15px;line-height:1;padding:0 2px}
 .lx:hover,.lx[data-armed]{color:var(--accent);font-size:12px}
 .addtask{width:100%;padding:7px 9px;border:1px dashed var(--grey);border-radius:7px;background:transparent;
 color:var(--ink);font:inherit;font-size:14px}
 .addtask:focus{outline:none;border-style:solid;border-color:var(--accent);background:var(--card)}
-.note{width:100%;min-height:54px;margin-top:4px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;
-background:var(--bg);color:var(--ink);font:inherit;font-size:13.5px;resize:vertical}
 .addlane{display:flex;justify-content:center;padding-top:8px}
 .addlane button{width:100%;padding:10px 6px;border:1px dashed var(--grey);border-radius:10px;background:transparent;
 color:var(--soft);font:500 13px -apple-system,sans-serif;cursor:pointer}
 .addlane button:hover{border-color:var(--accent);color:var(--accent)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px;cursor:grab;position:relative}
+.card.dragging{opacity:.4}
+.card.flash{box-shadow:0 0 0 2px var(--accent)}
+.card.archived{opacity:.65;padding:7px 10px}
+.top{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.status{font-size:11px;font-weight:600;padding:1px 7px;border-radius:10px;color:#fff;background:var(--idle);text-transform:uppercase;letter-spacing:.03em}
+.status.needs{background:var(--accent)}
+.status.running{background:var(--run)}
+.status.waiting{background:var(--wait)}
+.status.task{background:var(--mine)}
+.kind{font-size:11px;font-weight:600;padding:1px 6px;border-radius:4px;background:var(--chip);color:var(--soft)}
+.kind.slack{background:var(--slack);color:#fff}
+.kind.task{background:var(--mine);color:#fff}
 .age{color:var(--grey);font-size:12px;margin-left:auto;white-space:nowrap}
+.rm{border:0;background:none;color:var(--grey);cursor:pointer;font-size:16px;line-height:1;padding:0 0 0 4px}
+.rm:hover{color:var(--accent)}
 .headline{font-weight:650;font-size:16px;margin-top:6px;line-height:1.3;word-break:break-word}
 .sub{color:var(--grey);font-size:12.5px;margin-top:2px;word-break:break-all}
 .live{color:var(--run);font-weight:500}
-.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--run);margin-right:3px}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--run);margin-right:3px;flex:none}
+.dot.idle{background:var(--grey)}
 .dot.busy{animation:pulse 1.2s infinite}
 @keyframes pulse{50%{opacity:.25}}
 .next{margin-top:8px;padding:7px 9px;border-radius:6px;border-left:4px solid var(--accent);
 background:color-mix(in srgb,var(--accent) 13%,var(--card));font-weight:550;font-size:14.5px;line-height:1.35}
 .next::before{content:"NEXT";display:block;font-size:10.5px;font-weight:700;letter-spacing:.08em;color:var(--accent);margin-bottom:1px}
 .stale{color:var(--grey);font-size:12px;font-style:normal;font-weight:400}
+.subs{margin-top:8px;display:flex;flex-direction:column;gap:3px}
+.subs .lbl{font-size:10.5px;font-weight:700;letter-spacing:.08em;color:var(--grey);text-transform:uppercase}
+.srow{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:5px;background:var(--bg);font-size:13px;cursor:grab}
+.srow:hover{outline:1px solid var(--line)}
+.srow.dragging{opacity:.4}
+.srow input{margin:0;cursor:pointer}
+.srow .st{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;outline:none}
+.srow .st small{color:var(--grey);margin-left:4px}
+.srow.done .st{text-decoration:line-through;color:var(--grey)}
+.srow .sx{border:0;background:none;color:var(--grey);cursor:pointer;font-size:14px;padding:0 2px}
+.srow .sx:hover{color:var(--accent)}
+.more{border:0;background:none;color:var(--soft);font-size:12px;cursor:pointer;text-align:left;padding:2px 6px}
+.addsub{width:100%;padding:4px 7px;border:1px dashed var(--line);border-radius:5px;background:transparent;color:var(--ink);font:inherit;font-size:12.5px}
+.addsub:focus{outline:none;border-color:var(--accent)}
 .detail{display:none;margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);color:var(--soft);font-size:13.5px}
 .detail p{margin:0 0 6px}
 .card.open .detail{display:block}
+.note{width:100%;min-height:54px;margin-top:4px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;
+background:var(--bg);color:var(--ink);font:inherit;font-size:13.5px;resize:vertical}
 .tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px;align-items:center}
 .tag{background:var(--chip);border-radius:4px;padding:1px 7px;font-size:12px;color:var(--soft);text-decoration:none}
 a.tag:hover{color:var(--ink)}
@@ -105,27 +124,30 @@ aside .head a{color:var(--soft)}
 .hours span{position:absolute;right:6px;font-size:11.5px;color:var(--grey);transform:translateY(-50%)}
 .daycol{position:relative;border-left:1px solid var(--line)}
 .daycol.over{background:color-mix(in srgb,var(--accent) 7%,transparent)}
-.daycol.night{background:repeating-linear-gradient(transparent 0,transparent 0)}
 .hr{position:absolute;left:0;right:0;border-top:1px solid var(--line);pointer-events:none}
 .hr.half{border-top-style:dotted;opacity:.55}
-.box{position:absolute;left:3px;right:3px;border-radius:6px;padding:3px 18px 3px 7px;font-size:12.5px;overflow:hidden;
-background:var(--col);border-left:4px solid var(--other);cursor:move;user-select:none;z-index:2;line-height:1.25}
+.box{position:absolute;left:3px;right:3px;border-radius:6px;padding:3px 22px 3px 7px;font-size:12.5px;overflow:hidden;
+background:var(--col);border-left:4px solid var(--other);cursor:move;user-select:none;z-index:2;line-height:1.25;outline:none}
 .box[data-cat=critical]{border-left-color:var(--crit)}
 .box[data-cat=bugs]{border-left-color:var(--bug)}
 .box[data-cat=map]{border-left-color:var(--map)}
 .box[data-cat=done]{opacity:.5;text-decoration:line-through}
+.box.sel{box-shadow:0 0 0 2px var(--accent)}
 .box.dragging{opacity:.75;box-shadow:0 4px 12px rgba(0,0,0,.25);z-index:5}
+.box.leaving{opacity:.35;outline:2px dashed var(--accent)}
 .box .t{color:var(--soft);font-size:11px}
 .box .bt{font-weight:600;outline:none}
-.box .x{position:absolute;right:2px;top:1px;cursor:pointer;color:var(--grey);border:0;background:none;font-size:15px;padding:0 3px}
+.box .x{position:absolute;right:2px;top:2px;width:18px;height:18px;border-radius:4px;cursor:pointer;border:0;
+background:var(--card);color:var(--soft);font-size:14px;line-height:18px;padding:0;text-align:center}
+.box .x:hover{background:var(--accent);color:#fff}
 .box .rs{position:absolute;left:0;right:0;bottom:0;height:7px;cursor:ns-resize}
 .now{position:absolute;left:-3px;right:0;border-top:2px solid var(--accent);z-index:3;pointer-events:none}
 .now::before{content:"";position:absolute;left:-4px;top:-5px;width:8px;height:8px;border-radius:50%;background:var(--accent)}
 .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);
-padding:7px 13px;border-radius:6px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:9;font-size:14px}
-.toast.show{opacity:1}
-@media (max-width:1100px){.wrap{grid-template-columns:1fr}aside{border-left:0;border-top:1px solid var(--line);min-height:600px}
-.board{grid-template-columns:repeat(5,80vw)}}
+padding:7px 13px;border-radius:6px;opacity:0;transition:opacity .2s;z-index:9;font-size:14px;display:flex;gap:10px;align-items:center;pointer-events:none}
+.toast.show{opacity:1;pointer-events:auto}
+.toast button{border:0;background:none;color:var(--accent);font:600 14px -apple-system,sans-serif;cursor:pointer;padding:0}
+@media (max-width:1100px){.wrap{grid-template-columns:1fr}aside{border-left:0;border-top:1px solid var(--line);min-height:600px}}
 </style>
 </head>
 <body>
@@ -141,7 +163,7 @@ padding:7px 13px;border-radius:6px;opacity:0;transition:opacity .2s;pointer-even
   <aside>
     <div class="head">
       <h2>Time boxes</h2>
-      <p id="boxsum">Drag cards onto a day and time. Double-click empty time for a custom block.</p>
+      <p id="boxsum"></p>
       <div class="ctrls">
         <span>Days</span>
         <button data-days="3">3</button><button data-days="5">5</button><button data-days="7">7</button>
@@ -161,28 +183,26 @@ const DEFAULT_LANES = [
   {id: "map",      name: "Map of work",          hint: "planning, design, feature building"},
   {id: "other",    name: "Others",               hint: "tooling, config, one-offs"},
 ];
-const DONE_LANE = {id: "done", name: "Done", hint: "drag here"};
 // Cards with nowhere else to go land in these, so they can be renamed but not deleted
 const FIXED_LANES = new Set(["other", "done"]);
-const lanes = () => [...state.lanes, {...DONE_LANE, ...(state.doneName ? {name: state.doneName} : {})}];
-const laneIds = () => new Set(lanes().map(l => l.id));
 const CATEGORY_COL = {critical_blocking: "critical", bug_fixing: "bugs", map_of_work: "map", other: "other"};
 const STATUS = {
   needs:   {label: "Needs you", rank: 0},
+  task:    {label: "To-do",     rank: 0.5},
   running: {label: "Running",   rank: 1},
   waiting: {label: "Waiting",   rank: 2},
   idle:    {label: "Idle",      rank: 3},
-  task:    {label: "To-do",     rank: 0.5},
 };
+const DONE_KEEP = 86400, SUB_SHOW = 4;
 // Served by the local server: same origin. Served from GitHub Pages: talk to the local server
 const API = ["localhost", "127.0.0.1"].includes(location.hostname) ? "" : "http://localhost:8765";
 const SNAP = 15, DAY_MIN = 1440;
 const pref = (k, d) => { try { const v = localStorage.getItem("tb-" + k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } };
 const setPref = (k, v) => { try { localStorage.setItem("tb-" + k, JSON.stringify(v)); } catch (_) {} };
 let NDAYS = pref("days", 3), PX = pref("px", 0.9);
-let items = [], state = {placed: {}, boxes: {}, tasks: {}, lanes: DEFAULT_LANES}, now = Date.now() / 1000, slackSync = null;
-let busyUI = false;
-const expanded = new Set();
+let state = {}, items = [], byKey = new Map(), lastSessions = [], lastSlack = [];
+let now = Date.now() / 1000, slackSync = null, busyUI = false, selectedBox = null;
+const expanded = new Set(), showAllSubs = new Set();
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -206,7 +226,36 @@ const pretty = m => {
 const toMin = s => { const [h, m] = s.split(":").map(Number); return h * 60 + m; };
 const dayKey = offset => { const d = new Date(); d.setDate(d.getDate() + offset); return d.toLocaleDateString("en-CA"); };
 const firstWords = (s, n) => (s || "").split(/\s+/).slice(0, n).join(" ");
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const humanName = n => n.replace(/-\d+$/, "").replace(/([a-z])([A-Z])/g, "$1 $2");
 
+// ---- state: every change is sent as small path ops so stale tabs can't overwrite each other
+const set = (path, value) => ({path, value});
+const del = path => ({path, delete: true});
+
+function applyLocal(ops) {
+  for (const op of ops) {
+    const path = op.path, leaf = path[path.length - 1];
+    let node = state;
+    for (const k of path.slice(0, -1)) node = node[k] = node[k] || {};
+    if (op.delete) delete node[leaf];
+    else node[leaf] = op.value;
+  }
+}
+
+function commit(ops) {
+  applyLocal(ops);
+  rebuildItems();
+  render();
+  fetch(API + "/api/op", {method: "POST", body: JSON.stringify({ops})})
+    .catch(() => toast("Couldn't save, is the server running?"));
+}
+
+const lanes = () => [...(state.lanes && state.lanes.length ? state.lanes : DEFAULT_LANES),
+  {id: "done", name: state.doneName || "Done", hint: "archived for 24h, then gone"}];
+const laneIds = () => new Set(lanes().map(l => l.id));
+
+// ---- items
 function sessionStatus(s) {
   if (s.live && s.live.status === "busy") return "running";
   const w = s.ai && s.ai.waiting_on;
@@ -215,42 +264,81 @@ function sessionStatus(s) {
   return "idle";
 }
 
-function toItems(sessions, slack) {
-  const out = sessions.map(s => ({
-    key: "s:" + s.session_id, kind: "session", s, at: s.active_at,
-    headline: (s.ai && s.ai.headline) || s.title,
-    auto: CATEGORY_COL[s.ai && s.ai.category] || "other",
-    status: sessionStatus(s),
-    search: [s.title, s.repo, s.branch, s.first_ask, s.ai && s.ai.summary, s.ai && s.ai.headline, ...s.prs].join(" "),
-  }));
-  for (const m of slack) {
+// Archived means done; a session or agent comes back only if it has new messages after archiving
+function archiveInfo(key, at, revivable) {
+  const a = (state.archived || {})[key];
+  if (!a) return null;
+  if (revivable && at > a.at + 5) return {revived: true};
+  return {when: a.when, gone: now - a.when > DONE_KEEP};
+}
+
+function subtasksFor(parentKey, s) {
+  const out = [];
+  for (const a of (s && s.subtasks) || []) {
+    const key = `a:${s.session_id}:${a.id}`;
+    const arch = archiveInfo(key, a.active_at, true);
+    if (arch && !arch.revived) continue;
+    out.push({key, kind: "agent", parentKey, title: humanName(a.name), detail: a.task || a.description,
+      at: a.active_at, active: now - a.active_at < 300, last: a.last_reply});
+  }
+  for (const m of Object.values((state.subs || {})[parentKey] || {})) {
+    out.push({key: `m:${m.id}`, kind: "manual", parentKey, id: m.id, title: m.title, done: !!m.done, at: m.created});
+  }
+  return out.sort((x, y) => (x.done - y.done) || (y.active - x.active) || (y.at - x.at));
+}
+
+function rebuildItems() {
+  const out = [];
+  for (const s of lastSessions) {
+    out.push({key: "s:" + s.session_id, kind: "session", s, at: s.active_at, revivable: true,
+      headline: (s.ai && s.ai.headline) || s.title, auto: CATEGORY_COL[s.ai && s.ai.category] || "other",
+      status: sessionStatus(s),
+      search: [s.title, s.repo, s.branch, s.first_ask, s.ai && s.ai.summary, s.ai && s.ai.headline, ...s.prs].join(" ")});
+  }
+  for (const m of lastSlack) {
     out.push({key: "k:" + m.id, kind: "slack", m, at: Number(m.ts) || now,
       headline: m.headline || firstWords(m.ask, 5), auto: CATEGORY_COL[m.category] || "other", status: "needs",
       search: [m.who, m.where, m.summary, m.ask, m.headline].join(" ")});
   }
-  for (const t of Object.values(state.tasks)) {
+  for (const t of Object.values(state.tasks || {})) {
     out.push({key: "t:" + t.id, kind: "task", t, at: t.created, headline: t.title, auto: t.lane, status: "task",
       search: [t.title, t.note].join(" ")});
   }
-  return out;
+  byKey = new Map();
+  items = [];
+  for (const it of out) {
+    it.arch = archiveInfo(it.key, it.at, it.revivable);
+    if (it.arch && it.arch.gone) { byKey.set(it.key, it); continue; }
+    it.subs = subtasksFor(it.key, it.s);
+    items.push(it);
+    byKey.set(it.key, it);
+    for (const st of it.subs) byKey.set(st.key, {...st, headline: st.title, parent: it});
+  }
 }
 
 // A drag holds until the item gets new activity after it; a deleted lane falls back to Others
 function colOf(it) {
-  const ids = laneIds(), p = state.placed[it.key];
-  if (p && it.at <= p.at + 5 && ids.has(p.col)) return {col: p.col, pinned: true};
-  return {col: ids.has(it.auto) ? it.auto : "other", fresh: !!p && it.kind !== "task"};
+  if (it.arch && !it.arch.revived) return {col: "done"};
+  const ids = laneIds(), p = (state.placed || {})[it.key];
+  if (p && it.at <= p.at + 5 && ids.has(p.col)) return {col: p.col};
+  return {col: ids.has(it.auto) ? it.auto : "other", fresh: (!!p && it.kind !== "task") || !!(it.arch && it.arch.revived)};
+}
+const catOf = key => {
+  const it = byKey.get(key);
+  if (!it) return "other";
+  return colOf(it.parent || it).col;
+};
+
+function archive(it) {
+  commit([set(["archived", it.key], {at: it.at, when: now, title: it.headline}), del(["placed", it.key])]);
+  toast(`Moved “${it.headline}” to Done`, () => commit([del(["archived", it.key])]));
 }
 
-let lastSessions = [], lastSlack = [];
-function rebuildItems() {
-  items = toItems(lastSessions, lastSlack);
-}
-
-function addTask(lane, title) {
-  const id = Date.now().toString(36);
-  state.tasks[id] = {id, title, lane, note: "", created: Date.now() / 1000};
-  rebuildItems(); save(); render();
+function goTerminal(s) {
+  fetch(API + "/api/focus", {method: "POST", body: JSON.stringify({session_id: s.session_id})})
+    .then(r => r.json())
+    .then(r => toast(r.ok ? (r.action === "focused" ? "Switched to its Terminal tab" : "Opened in a new Terminal tab")
+                          : "Couldn't switch: " + (r.error || "error")));
 }
 
 function editable(node, onDone) {
@@ -276,22 +364,99 @@ function editable(node, onDone) {
   node.onblur = () => finish(true);
 }
 
-function goTerminal(s) {
-  fetch(API + "/api/focus", {method: "POST", body: JSON.stringify({session_id: s.session_id})})
-    .then(r => r.json())
-    .then(r => toast(r.ok ? (r.action === "focused" ? "Switched to its Terminal tab" : "Opened in a new Terminal tab")
-                          : "Couldn't switch: " + (r.error || "error")));
+function dragKey(node, key) {
+  node.draggable = true;
+  node.ondragstart = e => {
+    e.stopPropagation();
+    busyUI = true;
+    node.classList.add("dragging");
+    e.dataTransfer.setData("text/plain", key);
+  };
+  node.ondragend = () => { busyUI = false; node.classList.remove("dragging"); };
+}
+
+// ---- cards
+function subtaskList(it) {
+  const box = el("div", "subs");
+  const list = it.subs || [];
+  if (list.length) box.appendChild(el("div", "lbl", `Subtasks · ${list.length}`));
+  const shown = showAllSubs.has(it.key) ? list : list.slice(0, SUB_SHOW);
+  for (const st of shown) {
+    const row = el("div", "srow" + (st.done ? " done" : ""));
+    dragKey(row, st.key);
+    row.onclick = e => e.stopPropagation();
+    if (st.kind === "manual") {
+      const cb = el("input");
+      cb.type = "checkbox";
+      cb.checked = st.done;
+      cb.onchange = () => commit([set(["subs", it.key, st.id, "done"], cb.checked)]);
+      row.appendChild(cb);
+    } else {
+      row.appendChild(el("span", "dot" + (st.active ? " busy" : " idle")));
+    }
+    const label = el("span", "st", st.title);
+    if (st.detail) { label.appendChild(el("small", null, st.detail)); label.title = st.detail; }
+    if (st.kind === "manual") {
+      label.title = "Double-click to rename";
+      label.ondblclick = () => editable(label, v => commit([set(["subs", it.key, st.id, "title"], v)]));
+    }
+    row.appendChild(label);
+    if (st.kind === "agent") row.appendChild(el("span", "age", ago(st.at)));
+    const x = el("button", "sx", "×");
+    x.title = st.kind === "manual" ? "Delete subtask" : "Remove from tracking";
+    x.onclick = () => commit(st.kind === "manual"
+      ? [del(["subs", it.key, st.id])]
+      : [set(["archived", st.key], {at: st.at, when: now, title: st.title})]);
+    row.appendChild(x);
+    box.appendChild(row);
+  }
+  if (list.length > SUB_SHOW) {
+    const more = el("button", "more", showAllSubs.has(it.key) ? "Show fewer" : `Show all ${list.length}`);
+    more.onclick = e => { e.stopPropagation(); showAllSubs.has(it.key) ? showAllSubs.delete(it.key) : showAllSubs.add(it.key); render(); };
+    box.appendChild(more);
+  }
+  const add = el("input", "addsub");
+  add.placeholder = "+ subtask";
+  add.onclick = e => e.stopPropagation();
+  add.onkeydown = e => {
+    if (e.key !== "Enter" || !add.value.trim()) return;
+    const id = uid();
+    commit([set(["subs", it.key, id], {id, title: add.value.trim(), done: false, created: Date.now() / 1000})]);
+    const again = document.querySelector(`.card[data-key="${CSS.escape(it.key)}"] .addsub`);
+    if (again) again.focus();
+  };
+  box.appendChild(add);
+  return box;
+}
+
+function archivedCard(it) {
+  const c = el("div", "card archived");
+  c.dataset.key = it.key;
+  const top = el("div", "top");
+  top.append(el("span", "kind " + it.kind, {slack: "Slack", session: "Claude", task: "Mine"}[it.kind]),
+             el("span", "age", "done " + ago(it.arch.when) + " ago"));
+  c.append(top, el("div", "headline", it.headline));
+  const tags = el("div", "tags");
+  const r = el("button", "go", "Restore");
+  r.onclick = () => commit([del(["archived", it.key])]);
+  tags.appendChild(r);
+  c.appendChild(tags);
+  dragKey(c, it.key);
+  return c;
 }
 
 function card(it, info) {
   const c = el("div", "card" + (expanded.has(it.key) ? " open" : ""));
-  c.draggable = true;
   c.dataset.key = it.key;
+  dragKey(c, it.key);
   const top = el("div", "top");
   top.appendChild(el("span", "status " + it.status, STATUS[it.status].label));
-  const kindLabel = {slack: "Slack", session: "Claude", task: "Mine"}[it.kind];
-  top.appendChild(el("span", "kind " + it.kind, kindLabel));
+  top.appendChild(el("span", "kind " + it.kind, {slack: "Slack", session: "Claude", task: "Mine"}[it.kind]));
   top.appendChild(el("span", "age", ago(it.at)));
+  const rm = el("button", "rm", "×");
+  rm.title = "Mark done and stop tracking (restorable from Done for 24h)";
+  rm.onclick = e => { e.stopPropagation(); archive(it); };
+  top.appendChild(rm);
   c.appendChild(top);
   const hl = el("div", "headline", it.headline);
   c.appendChild(hl);
@@ -305,8 +470,7 @@ function card(it, info) {
     if (s.live) {
       const lv = el("span", "live");
       lv.append(" · ", el("span", "dot" + (s.live.status === "busy" ? " busy" : "")),
-        (s.live.tty || "").replace("/dev/", "") || "open" ,
-        s.live.status === "shell" ? " · background cmd" : "");
+        (s.live.tty || "").replace("/dev/", "") || "open", s.live.status === "shell" ? " · background cmd" : "");
       sub.appendChild(lv);
     }
     c.appendChild(sub);
@@ -333,24 +497,14 @@ function card(it, info) {
   } else if (it.kind === "task") {
     const t = it.t;
     hl.title = "Double-click to rename";
-    hl.ondblclick = e => { e.stopPropagation(); editable(hl, v => { t.title = v; rebuildItems(); save(); render(); }); };
+    hl.ondblclick = e => { e.stopPropagation(); editable(hl, v => commit([set(["tasks", t.id, "title"], v)])); };
     if (t.note) c.appendChild(el("div", "sub", t.note));
     const note = el("textarea", "note");
     note.placeholder = "Add a note…";
     note.value = t.note || "";
     note.onclick = e => e.stopPropagation();
-    note.onblur = () => { t.note = note.value.trim(); save(); render(); };
+    note.onblur = () => { if ((t.note || "") !== note.value.trim()) commit([set(["tasks", t.id, "note"], note.value.trim())]); };
     detail.appendChild(note);
-    const del = el("button", "go", "Delete");
-    del.onclick = e => {
-      e.stopPropagation();
-      if (del.dataset.armed) {
-        delete state.tasks[t.id];
-        for (const b of Object.values(state.boxes)) if (b.key === it.key) delete state.boxes[b.id];
-        rebuildItems(); save(); render();
-      } else { del.dataset.armed = "1"; del.textContent = "Click again to delete"; }
-    };
-    tags.appendChild(del);
   } else {
     const m = it.m;
     c.appendChild(el("div", "sub", [m.who, m.where].filter(Boolean).join(" · ")));
@@ -363,25 +517,31 @@ function card(it, info) {
       tags.appendChild(a);
     }
   }
+  c.appendChild(subtaskList(it));
   c.append(detail, tags);
   c.onclick = e => {
-    if (e.target.closest("a,button")) return;
+    if (e.target.closest("a,button,input,textarea")) return;
     expanded.has(it.key) ? expanded.delete(it.key) : expanded.add(it.key);
     c.classList.toggle("open");
   };
-  c.ondragstart = e => { busyUI = true; c.classList.add("dragging"); e.dataTransfer.setData("text/plain", it.key); };
-  c.ondragend = () => { busyUI = false; c.classList.remove("dragging"); };
   return c;
 }
 
+// ---- lanes
 function laneHeader(c, count) {
   const h = el("h2");
+  if (c.id !== "done") {
+    h.draggable = true;
+    h.title = "Drag to reorder lanes";
+    h.ondragstart = e => { busyUI = true; e.dataTransfer.setData("application/x-lane", c.id); };
+    h.ondragend = () => { busyUI = false; };
+    h.appendChild(el("span", "grip", "⋮⋮"));
+  }
   const name = el("span", "lname", c.name);
   name.title = "Double-click to rename";
   name.ondblclick = () => editable(name, v => {
-    if (c.id === "done") state.doneName = v;
-    else state.lanes.find(l => l.id === c.id).name = v;
-    save(); render();
+    if (c.id === "done") commit([set(["doneName"], v)]);
+    else commit([set(["lanes"], lanes().filter(l => l.id !== "done").map(l => l.id === c.id ? {...l, name: v} : l))]);
   });
   h.append(name, el("span", "count", ` · ${count}`));
   if (!FIXED_LANES.has(c.id)) {
@@ -389,10 +549,10 @@ function laneHeader(c, count) {
     x.title = "Delete lane";
     x.onclick = () => {
       if (!x.dataset.armed) { x.dataset.armed = "1"; x.textContent = "delete?"; return; }
-      state.lanes = state.lanes.filter(l => l.id !== c.id);
-      for (const t of Object.values(state.tasks)) if (t.lane === c.id) t.lane = "other";
-      for (const [k, p] of Object.entries(state.placed)) if (p.col === c.id) delete state.placed[k];
-      rebuildItems(); save(); render();
+      const ops = [set(["lanes"], lanes().filter(l => l.id !== "done" && l.id !== c.id))];
+      for (const t of Object.values(state.tasks || {})) if (t.lane === c.id) ops.push(set(["tasks", t.id, "lane"], "other"));
+      for (const [k, p] of Object.entries(state.placed || {})) if (p.col === c.id) ops.push(del(["placed", k]));
+      commit(ops);
     };
     h.appendChild(x);
   }
@@ -400,13 +560,23 @@ function laneHeader(c, count) {
   return h;
 }
 
+function moveLane(dragId, beforeId) {
+  const list = lanes().filter(l => l.id !== "done");
+  const from = list.findIndex(l => l.id === dragId);
+  if (from < 0 || dragId === beforeId) return;
+  const [lane] = list.splice(from, 1);
+  const to = beforeId === "done" ? list.length : list.findIndex(l => l.id === beforeId);
+  list.splice(to < 0 ? list.length : to, 0, lane);
+  commit([set(["lanes"], list)]);
+}
+
 function addTaskInput(laneId) {
   const inp = el("input", "addtask");
   inp.placeholder = "+ Add to-do";
   inp.onkeydown = e => {
     if (e.key === "Enter" && inp.value.trim()) {
-      const v = inp.value.trim();
-      addTask(laneId, v);
+      const id = uid();
+      commit([set(["tasks", id], {id, title: inp.value.trim(), lane: laneId, note: "", created: Date.now() / 1000})]);
       const again = document.querySelector(`.col[data-col="${laneId}"] .addtask`);
       if (again) again.focus();
     }
@@ -419,15 +589,27 @@ function addLaneColumn() {
   const wrap = el("div", "addlane");
   const b = el("button", null, "+ Add lane");
   b.onclick = () => {
-    const id = "lane" + Date.now().toString(36);
-    const otherIdx = state.lanes.findIndex(l => l.id === "other");
-    state.lanes.splice(otherIdx < 0 ? state.lanes.length : otherIdx, 0, {id, name: "New lane", hint: ""});
-    save(); render();
+    const id = "lane" + uid(), list = lanes().filter(l => l.id !== "done");
+    const otherIdx = list.findIndex(l => l.id === "other");
+    list.splice(otherIdx < 0 ? list.length : otherIdx, 0, {id, name: "New lane", hint: ""});
+    commit([set(["lanes"], list)]);
     const name = document.querySelector(`.col[data-col="${id}"] .lname`);
-    if (name) editable(name, v => { state.lanes.find(l => l.id === id).name = v; save(); render(); });
+    if (name) editable(name, v => commit([set(["lanes"], lanes().filter(l => l.id !== "done").map(l => l.id === id ? {...l, name: v} : l))]));
   };
   wrap.appendChild(b);
   return wrap;
+}
+
+function dropOnLane(c, key) {
+  const it = byKey.get(key);
+  if (!it || it.parent) return;
+  if (c.id === "done") return archive(it);
+  const ops = [];
+  if (it.arch) ops.push(del(["archived", it.key]));
+  if (it.kind === "task") ops.push(set(["tasks", it.t.id, "lane"], c.id));
+  else if (c.id === it.auto) ops.push(del(["placed", it.key]));
+  else ops.push(set(["placed", it.key], {col: c.id, at: it.at}));
+  commit(ops);
 }
 
 function renderBoard() {
@@ -435,7 +617,7 @@ function renderBoard() {
   const board = document.getElementById("board");
   board.replaceChildren();
   const all = lanes();
-  board.style.gridTemplateColumns = `repeat(${all.length - 1}, minmax(250px,1fr)) 120px 190px`;
+  board.style.gridTemplateColumns = `repeat(${all.length - 1}, minmax(250px,1fr)) 120px 210px`;
   const groups = Object.fromEntries(all.map(c => [c.id, []]));
   for (const it of items) {
     if (q && !it.search.toLowerCase().includes(q)) continue;
@@ -444,36 +626,40 @@ function renderBoard() {
   }
   for (const c of all) {
     if (c.id === "done") board.appendChild(addLaneColumn());
-    groups[c.id].sort((a, b) => STATUS[a[0].status].rank - STATUS[b[0].status].rank || b[0].at - a[0].at);
+    const list = groups[c.id];
+    if (c.id === "done") list.sort((a, b) => b[0].arch.when - a[0].arch.when);
+    else list.sort((a, b) => STATUS[a[0].status].rank - STATUS[b[0].status].rank || b[0].at - a[0].at);
     const col = el("section", "col");
     col.dataset.col = c.id;
-    col.appendChild(laneHeader(c, groups[c.id].length));
+    col.appendChild(laneHeader(c, list.length));
     if (c.id !== "done") col.appendChild(addTaskInput(c.id));
-    if (!groups[c.id].length) col.appendChild(el("div", "empty", "—"));
-    for (const [it, info] of groups[c.id]) col.appendChild(card(it, info));
-    col.ondragover = e => { e.preventDefault(); col.classList.add("over"); };
-    col.ondragleave = () => col.classList.remove("over");
+    if (!list.length) col.appendChild(el("div", "empty", c.id === "done" ? "drag cards here when finished" : "—"));
+    for (const [it, info] of list) col.appendChild(c.id === "done" ? archivedCard(it) : card(it, info));
+    col.ondragover = e => {
+      e.preventDefault();
+      col.classList.add(e.dataTransfer.types.includes("application/x-lane") ? "lane-over" : "over");
+    };
+    col.ondragleave = () => col.classList.remove("over", "lane-over");
     col.ondrop = e => {
       e.preventDefault();
-      col.classList.remove("over");
-      const it = items.find(x => x.key === e.dataTransfer.getData("text/plain"));
-      if (!it) return;
-      if (it.kind === "task") it.t.lane = c.id;
-      else if (c.id === it.auto) delete state.placed[it.key];
-      else state.placed[it.key] = {col: c.id, at: it.at};
-      rebuildItems(); save(); render();
+      col.classList.remove("over", "lane-over");
+      const laneId = e.dataTransfer.getData("application/x-lane");
+      if (laneId) moveLane(laneId, c.id);
+      else dropOnLane(c, e.dataTransfer.getData("text/plain"));
     };
     board.appendChild(col);
   }
-  const needs = items.filter(i => i.status === "needs" && colOf(i).col !== "done").length;
-  const running = items.filter(i => i.status === "running").length;
+  const live = items.filter(i => colOf(i).col !== "done");
+  const needs = live.filter(i => i.status === "needs").length;
+  const running = live.filter(i => i.status === "running").length;
   document.getElementById("meta").textContent =
-    `${items.filter(i => i.kind === "session").length} sessions · ${running} running · ${needs} need you · ` +
+    `${live.filter(i => i.kind === "session").length} sessions · ${running} running · ${needs} need you · ` +
     `updated ${new Date().toLocaleTimeString([], {hour: "numeric", minute: "2-digit"})}`;
   document.title = needs ? `(${needs}) Session Board` : "Session Board";
   document.getElementById("slackmeta").textContent = slackSync ? `Slack synced ${ago(slackSync)} ago` : "Slack not synced yet";
 }
 
+// ---- time boxes
 function renderTimeline() {
   const days = document.getElementById("days"), grid = document.getElementById("grid");
   document.querySelector("aside").style.setProperty("--ndays", NDAYS);
@@ -505,63 +691,75 @@ function renderTimeline() {
       n.style.top = nm * PX + "px";
       col.appendChild(n);
     }
-    for (const b of Object.values(state.boxes).filter(b => b.date === key)) {
+    for (const b of Object.values(state.boxes || {}).filter(b => b.date === key)) {
       total += b.dur;
       col.appendChild(boxEl(b));
     }
     setupDayCol(col);
     grid.appendChild(col);
   }
-  const p = document.getElementById("boxsum");
-  p.replaceChildren(`${(total / 60).toFixed(1)}h boxed over the next ${NDAYS} days · `,
+  document.getElementById("boxsum").replaceChildren(
+    `${(total / 60).toFixed(1)}h boxed over the next ${NDAYS} days · drag cards or subtasks onto a time · `,
     Object.assign(el("a", null, "export .ics"), {href: API + "/today.ics"}));
 }
 
+function removeBox(b) {
+  commit([del(["boxes", b.id])]);
+  toast(`Removed “${b.title}” from the calendar`, () => commit([set(["boxes", b.id], b)]));
+}
+
 function boxEl(b) {
-  const it = items.find(x => x.key === b.key);
-  const box = el("div", "box");
-  box.dataset.cat = it ? colOf(it).col : "other";
+  const it = byKey.get(b.key);
+  const box = el("div", "box" + (selectedBox === b.id ? " sel" : ""));
+  box.tabIndex = 0;
+  box.dataset.cat = it && it.arch && !it.arch.revived ? "done" : catOf(b.key);
   box.style.top = toMin(b.start) * PX + "px";
-  box.style.height = Math.max(b.dur * PX - 2, 16) + "px";
+  box.style.height = Math.max(b.dur * PX - 2, 18) + "px";
   const t = el("div", "t", `${pretty(toMin(b.start))}–${pretty(toMin(b.start) + b.dur)}`);
   const bt = el("div", "bt", it ? it.headline : b.title);
   if (!b.key) {
-    bt.contentEditable = "true";
-    bt.onblur = () => { b.title = bt.textContent.trim() || "Focus block"; save(); };
-    bt.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); bt.blur(); } };
+    bt.title = "Double-click to rename";
+    bt.ondblclick = e => { e.stopPropagation(); editable(bt, v => commit([set(["boxes", b.id, "title"], v)])); };
   }
   const x = el("button", "x", "×");
-  x.title = "Remove block";
-  x.onclick = e => { e.stopPropagation(); delete state.boxes[b.id]; save(); renderTimeline(); };
+  x.title = "Remove from calendar (or select the block and press Delete, or drag it off the calendar)";
+  x.onmousedown = e => e.stopPropagation();
+  x.onclick = e => { e.stopPropagation(); removeBox(b); };
   const rs = el("div", "rs");
   box.append(t, bt, x, rs);
-  box.ondblclick = e => {
-    e.stopPropagation();
-    if (it && it.kind === "session") goTerminal(it.s);
-    else if (it && it.kind === "slack" && it.m.url) window.open(it.m.url, "_blank", "noopener");
+  box.onkeydown = e => {
+    if (e.target.isContentEditable) return;
+    if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); removeBox(b); }
   };
-  box.onclick = () => {
-    if (box.dataset.moved) return;
-    const c = document.querySelector(`.card[data-key="${CSS.escape(b.key || "")}"]`);
-    if (!c) return;
-    c.scrollIntoView({behavior: "smooth", block: "center"});
-    c.classList.add("flash"); setTimeout(() => c.classList.remove("flash"), 1200);
+  box.ondblclick = e => {
+    if (e.target.isContentEditable) return;
+    e.stopPropagation();
+    const target = it && (it.parent || it);
+    if (target && target.kind === "session") goTerminal(target.s);
+    else if (target && target.kind === "slack" && target.m.url) window.open(target.m.url, "_blank", "noopener");
   };
   dragBox(box, b, rs, t);
   return box;
 }
 
-// Move or resize a block with the mouse; moving sideways changes its day
+// Move or resize a block; moving sideways changes its day, dropping it outside the calendar removes it
 function dragBox(box, b, handle, label) {
   box.onmousedown = e => {
-    if (e.target.closest(".x") || e.target.isContentEditable) return;
+    if (e.target.isContentEditable || e.button !== 0) return;
     e.preventDefault();
-    const resize = e.target === handle, y0 = e.clientY, s0 = toMin(b.start), d0 = b.dur, d0date = b.date;
-    let moved = false;
+    selectedBox = b.id;
+    document.querySelectorAll(".box.sel").forEach(n => n.classList.remove("sel"));
+    box.classList.add("sel");
+    box.focus();
+    const resize = e.target === handle, y0 = e.clientY, s0 = toMin(b.start), d0 = b.dur, date0 = b.date;
+    const aside = document.querySelector("aside");
+    let moved = false, outside = false;
     busyUI = true;
-    delete box.dataset.moved;
     const mv = ev => {
       const dm = Math.round((ev.clientY - y0) / PX / SNAP) * SNAP;
+      const r = aside.getBoundingClientRect();
+      outside = !resize && (ev.clientX < r.left || ev.clientX > r.right);
+      box.classList.toggle("leaving", outside);
       if (resize) {
         b.dur = Math.max(SNAP, Math.min(d0 + dm, DAY_MIN - s0));
         box.style.height = (b.dur * PX - 2) + "px";
@@ -575,16 +773,17 @@ function dragBox(box, b, handle, label) {
         const col = under && under.closest(".daycol");
         if (col && col.dataset.date !== b.date) { b.date = col.dataset.date; col.appendChild(box); }
       }
-      moved = moved || dm !== 0 || b.date !== d0date;
+      moved = moved || dm !== 0 || b.date !== date0;
       box.classList.add("dragging");
       label.textContent = `${pretty(toMin(b.start))}–${pretty(toMin(b.start) + b.dur)}`;
     };
     const up = () => {
       document.removeEventListener("mousemove", mv);
       document.removeEventListener("mouseup", up);
-      box.classList.remove("dragging");
+      box.classList.remove("dragging", "leaving");
       busyUI = false;
-      if (moved) { box.dataset.moved = "1"; save(); renderTimeline(); }
+      if (outside) removeBox({...b, start: hhmm(s0), dur: d0, date: date0});
+      else if (moved) commit([set(["boxes", b.id], {...b})]);
     };
     document.addEventListener("mousemove", mv);
     document.addEventListener("mouseup", up);
@@ -593,39 +792,38 @@ function dragBox(box, b, handle, label) {
 
 function minuteAt(col, e) {
   const r = col.getBoundingClientRect();
-  const m = (e.clientY - r.top) / PX;
-  return Math.max(0, Math.min(Math.round(m / SNAP) * SNAP, DAY_MIN - SNAP));
+  return Math.max(0, Math.min(Math.round((e.clientY - r.top) / PX / SNAP) * SNAP, DAY_MIN - SNAP));
 }
 
 function setupDayCol(col) {
-  col.ondragover = e => { e.preventDefault(); col.classList.add("over"); };
+  col.ondragover = e => {
+    if (e.dataTransfer.types.includes("application/x-lane")) return;
+    e.preventDefault();
+    col.classList.add("over");
+  };
   col.ondragleave = () => col.classList.remove("over");
   col.ondrop = e => {
     e.preventDefault();
     col.classList.remove("over");
-    const it = items.find(x => x.key === e.dataTransfer.getData("text/plain"));
+    const it = byKey.get(e.dataTransfer.getData("text/plain"));
     if (!it) return;
-    const start = minuteAt(col, e), id = "b" + Date.now().toString(36), dur = Math.min(60, DAY_MIN - start);
-    state.boxes[id] = {id, key: it.key, title: it.headline, date: col.dataset.date, start: hhmm(start), dur};
-    save(); renderTimeline();
+    const start = minuteAt(col, e), id = uid(), dur = Math.min(60, DAY_MIN - start);
+    const title = it.parent ? `${it.title} · ${it.parent.headline}` : it.headline;
+    commit([set(["boxes", id], {id, key: it.key, title, date: col.dataset.date, start: hhmm(start), dur})]);
     toast(`Boxed ${pretty(start)}–${pretty(start + dur)}`);
   };
   col.ondblclick = e => {
     if (e.target.closest(".box")) return;
-    const start = minuteAt(col, e), id = "b" + Date.now().toString(36);
-    state.boxes[id] = {id, key: null, title: "Focus block", date: col.dataset.date, start: hhmm(start), dur: 30};
-    save(); renderTimeline();
-    const bt = [...document.querySelectorAll(`.daycol[data-date="${col.dataset.date}"] .bt[contenteditable]`)].pop();
-    if (bt) { bt.focus(); document.getSelection().selectAllChildren(bt); }
+    const start = minuteAt(col, e), id = uid();
+    commit([set(["boxes", id], {id, key: null, title: "Focus block", date: col.dataset.date, start: hhmm(start), dur: 30})]);
+    const bt = [...document.querySelectorAll(`.daycol[data-date="${col.dataset.date}"] .box`)]
+      .find(n => n.querySelector(".bt").textContent === "Focus block");
+    if (bt) editable(bt.querySelector(".bt"), v => commit([set(["boxes", id, "title"], v)]));
   };
 }
 
+// ---- shell
 function render() { renderBoard(); renderTimeline(); }
-
-async function save() {
-  try { await fetch(API + "/api/state", {method: "POST", body: JSON.stringify(state)}); }
-  catch (_) { toast("Couldn't save, is the server running?"); }
-}
 
 const typing = () => {
   const a = document.activeElement;
@@ -636,23 +834,31 @@ async function refresh() {
   if (busyUI || typing()) return;
   try {
     const [d, st, sl] = await Promise.all(["/api/sessions", "/api/state", "/api/slack"].map(u => fetch(API + u).then(r => r.json())));
+    if (busyUI || typing()) return;
     now = d.now;
-    state = {placed: st.placed || {}, boxes: st.boxes || {}, tasks: st.tasks || {},
-             lanes: st.lanes && st.lanes.length ? st.lanes : DEFAULT_LANES.map(l => ({...l})), doneName: st.doneName};
+    state = st || {};
     slackSync = sl.synced_at;
     lastSessions = d.sessions;
     lastSlack = sl.items || [];
     rebuildItems();
-    if (!busyUI) render();
+    render();
   } catch (_) {
     document.getElementById("meta").textContent = "server not reachable, run: python3 ~/timebox/server.py";
   }
 }
 
-function toast(msg) {
+let toastTimer = null;
+function toast(msg, undo) {
   const t = document.getElementById("toast");
-  t.textContent = msg; t.classList.add("show");
-  setTimeout(() => t.classList.remove("show"), 1600);
+  t.replaceChildren(el("span", null, msg));
+  if (undo) {
+    const b = el("button", null, "Undo");
+    b.onclick = () => { undo(); t.classList.remove("show"); };
+    t.appendChild(b);
+  }
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), undo ? 5000 : 1800);
 }
 
 function setupControls() {
@@ -689,6 +895,12 @@ function setupControls() {
   };
   document.getElementById("zin").onclick = () => zoom(1.25);
   document.getElementById("zout").onclick = () => zoom(0.8);
+  document.addEventListener("mousedown", e => {
+    if (!e.target.closest(".box") && selectedBox) {
+      selectedBox = null;
+      document.querySelectorAll(".box.sel").forEach(n => n.classList.remove("sel"));
+    }
+  });
 }
 
 document.getElementById("q").oninput = renderBoard;
