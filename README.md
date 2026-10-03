@@ -33,6 +33,14 @@ Options:
 | `--days` | `14` | How far back to look for sessions |
 | `--allow-origin` | `https://dushyant-uipath.github.io` | Extra web origin allowed to call the server, repeatable |
 
+### Link to the session that edits the board
+
+**Tweak this board in Claude** at the top switches to a chosen Claude session, or resumes it if it's closed. Set the session once:
+
+```sh
+curl -X POST -d '{"ops":[{"path":["homeSession"],"value":"<session-id>"}]}' http://localhost:8765/api/op
+```
+
 ## Start it at login
 
 Save this as `~/Library/LaunchAgents/com.session-timebox.plist`, replacing `YOUR_USER`:
@@ -73,6 +81,8 @@ Then load it with `launchctl load ~/Library/LaunchAgents/com.session-timebox.pli
 
 - Type in **+ Add to-do** at the top of a lane and press Enter to add a card of your own.
 - Double-click a to-do title to rename it, and click the card to add a note.
+- Double-click any card title to rename it. **auto name** on a renamed session or Slack card goes back to the generated headline.
+- Drag a card onto another card to place it above or below; each lane keeps its own order. Cards you haven't placed yet show at the top, by status.
 - Double-click a lane name to rename it, and press Enter to save or Escape to cancel.
 - Drag a lane by its header to reorder lanes.
 - **+ Add lane** creates a lane. Click a lane's **×** twice to delete it; its to-dos move to Others.
@@ -133,9 +143,8 @@ The server listens on `127.0.0.1` only and answers requests from `localhost` and
 
 | File | Contents |
 |---|---|
-| `timebox.db` | SQLite: lanes, to-dos, subtasks, card placements, done cards, and time boxes |
-| `summaries.json` | Session summaries |
+| `timebox.db` | SQLite: session summaries, lanes, card order and names, to-dos, subtasks, placements, done cards, and time boxes |
 | `slack.json` | Slack asks |
 | `server.log` | Server output |
 
-The page sends each change as a small update (`POST /api/op`, applied in one SQLite transaction by `apply_ops` in `server.py`), so two open tabs don't overwrite each other. A `state.json` from an older version is imported into `timebox.db` on first start.
+The page sends each change as a small update (`POST /api/op`, applied in one SQLite transaction by `apply_ops` in `server.py`), so two open tabs don't overwrite each other. A `state.json` or `summaries.json` from an older version is imported into `timebox.db` on first start.

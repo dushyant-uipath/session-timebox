@@ -20,7 +20,7 @@ from sessions_digest import PROJECTS, SKIP_DIR_MARKERS, digest, subagent
 HERE = Path(__file__).resolve().parent
 STATE = HERE / "state.json"  # pre-SQLite storage, imported once
 DB = HERE / "timebox.db"
-SUMMARIES = HERE / "summaries.json"
+SUMMARIES = HERE / "summaries.json"  # pre-SQLite storage, imported once
 SLACK = HERE / "slack.json"
 LIVE_DIR = Path.home() / ".claude" / "sessions"
 UUID = re.compile(r"^[0-9a-f-]{36}$")
@@ -48,12 +48,16 @@ def subtasks(session_path):
 def db():
     conn = sqlite3.connect(DB, timeout=10)
     conn.execute("CREATE TABLE IF NOT EXISTS state (section TEXT, key TEXT, value TEXT, PRIMARY KEY (section, key))")
+    conn.execute("CREATE TABLE IF NOT EXISTS summaries (session_id TEXT PRIMARY KEY, value TEXT)")
     return conn
 
 
-# Create the database, importing state.json from the pre-SQLite version on first run
+# Create the database, importing state.json and summaries.json from the pre-SQLite version on first run
 def init_db():
     with _state_lock, db() as conn:
+        if not conn.execute("SELECT COUNT(*) FROM summaries").fetchone()[0] and SUMMARIES.exists():
+            conn.executemany("INSERT OR REPLACE INTO summaries VALUES (?, ?)",
+                             [(sid, json.dumps(v)) for sid, v in read_json(SUMMARIES, {}).items()])
         if conn.execute("SELECT COUNT(*) FROM state").fetchone()[0] or not STATE.exists():
             return
         for section, val in read_json(STATE, {}).items():
@@ -106,7 +110,17 @@ def read_json(path, default):
         return default
 
 
-_summaries = read_json(SUMMARIES, {})
+_summaries = {}  # session_id -> summary, loaded from SQLite in main()
+
+
+def load_summaries():
+    with db() as conn:
+        return {sid: json.loads(v) for sid, v in conn.execute("SELECT session_id, value FROM summaries")}
+
+
+def save_summary(sid):
+    with db() as conn:
+        conn.execute("INSERT OR REPLACE INTO summaries VALUES (?, ?)", (sid, json.dumps(_summaries[sid])))
 
 
 def live_sessions():
@@ -207,10 +221,11 @@ def summary_worker():
                 out = summarize(s)
                 _summaries[s["session_id"]] = {**out, "active_at": s["active_at"], "at": time.time(),
                                                "v": SUMMARY_VERSION}
-                SUMMARIES.write_text(json.dumps(_summaries, indent=1))
+                save_summary(s["session_id"])
             except Exception as e:  # keep the worker alive; retry on the next pass
                 print("summary failed", s["session_id"], e, flush=True)
                 _summaries.setdefault(s["session_id"], {}).update(active_at=s["active_at"], v=SUMMARY_VERSION)
+                save_summary(s["session_id"])
         time.sleep(15)
 
 
@@ -351,6 +366,7 @@ def main():
     Handler.days = a.days
     Handler.allowed_origins = {f"http://localhost:{a.port}", f"http://127.0.0.1:{a.port}", *a.allow_origin}
     init_db()
+    _summaries.update(load_summaries())
     sessions(a.days)
     threading.Thread(target=summary_worker, daemon=True).start()
     print(f"Session board on http://localhost:{a.port}", flush=True)

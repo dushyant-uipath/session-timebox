@@ -17,6 +17,11 @@ display:flex;flex-direction:column}
 header{display:flex;align-items:center;gap:16px;padding:12px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 h1{font-size:18px;margin:0;font-weight:600}
 .meta{color:var(--soft);font-size:13px}
+.go.home{margin-left:0;padding:6px 12px;font-size:13px;border-color:var(--accent);color:var(--accent)}
+.go.home:hover{background:var(--accent);color:#fff}
+.card.drop-before{box-shadow:0 -3px 0 var(--accent)}
+.card.drop-after{box-shadow:0 3px 0 var(--accent)}
+.headline{cursor:text}
 input[type=search]{margin-left:auto;padding:7px 11px;border:1px solid var(--line);border-radius:6px;
 background:var(--card);color:var(--ink);width:240px;font:inherit;font-size:14px}
 .wrap{flex:1;display:grid;grid-template-columns:1fr 8px var(--aside-w,560px);min-height:0}
@@ -156,6 +161,7 @@ padding:7px 13px;border-radius:6px;opacity:0;transition:opacity .2s;z-index:9;fo
   <span class="meta" id="meta">loading…</span>
   <span class="meta" id="slackmeta"></span>
   <input type="search" id="q" placeholder="Filter by title, repo, PR…">
+  <button class="go home" id="home" hidden title="Switch to the Claude session that builds this board, or resume it if it's closed">Tweak this board in Claude</button>
 </header>
 <div class="wrap">
   <main class="board" id="board"></main>
@@ -288,16 +294,18 @@ function subtasksFor(parentKey, s) {
 }
 
 function rebuildItems() {
-  const out = [];
+  const out = [], names = state.names || {};
   for (const s of lastSessions) {
     out.push({key: "s:" + s.session_id, kind: "session", s, at: s.active_at, revivable: true,
-      headline: (s.ai && s.ai.headline) || s.title, auto: CATEGORY_COL[s.ai && s.ai.category] || "other",
+      headline: names["s:" + s.session_id] || (s.ai && s.ai.headline) || s.title,
+      auto: CATEGORY_COL[s.ai && s.ai.category] || "other",
       status: sessionStatus(s),
       search: [s.title, s.repo, s.branch, s.first_ask, s.ai && s.ai.summary, s.ai && s.ai.headline, ...s.prs].join(" ")});
   }
   for (const m of lastSlack) {
     out.push({key: "k:" + m.id, kind: "slack", m, at: Number(m.ts) || now,
-      headline: m.headline || firstWords(m.ask, 5), auto: CATEGORY_COL[m.category] || "other", status: "needs",
+      headline: names["k:" + m.id] || m.headline || firstWords(m.ask, 5),
+      auto: CATEGORY_COL[m.category] || "other", status: "needs",
       search: [m.who, m.where, m.summary, m.ask, m.headline].join(" ")});
   }
   for (const t of Object.values(state.tasks || {})) {
@@ -459,9 +467,20 @@ function card(it, info) {
   top.appendChild(rm);
   c.appendChild(top);
   const hl = el("div", "headline", it.headline);
+  hl.title = "Double-click to rename";
+  hl.ondblclick = e => {
+    e.stopPropagation();
+    editable(hl, v => commit(it.kind === "task" ? [set(["tasks", it.t.id, "title"], v)] : [set(["names", it.key], v)]));
+  };
   c.appendChild(hl);
   const tags = el("div", "tags");
   if (info.fresh) tags.appendChild(el("span", "tag new", "new activity"));
+  if (it.kind !== "task" && (state.names || {})[it.key]) {
+    const reset = el("button", "tag", "auto name");
+    reset.title = "Go back to the generated name";
+    reset.onclick = e => { e.stopPropagation(); commit([del(["names", it.key])]); };
+    tags.appendChild(reset);
+  }
   const detail = el("div", "detail");
 
   if (it.kind === "session") {
@@ -496,8 +515,6 @@ function card(it, info) {
     tags.appendChild(go);
   } else if (it.kind === "task") {
     const t = it.t;
-    hl.title = "Double-click to rename";
-    hl.ondblclick = e => { e.stopPropagation(); editable(hl, v => commit([set(["tasks", t.id, "title"], v)])); };
     if (t.note) c.appendChild(el("div", "sub", t.note));
     const note = el("textarea", "note");
     note.placeholder = "Add a note…";
@@ -519,6 +536,24 @@ function card(it, info) {
   }
   c.appendChild(subtaskList(it));
   c.append(detail, tags);
+  c.ondragover = e => {
+    if (e.dataTransfer.types.includes("application/x-lane")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const r = c.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;
+    c.classList.toggle("drop-before", !after);
+    c.classList.toggle("drop-after", after);
+  };
+  c.ondragleave = () => c.classList.remove("drop-before", "drop-after");
+  c.ondrop = e => {
+    if (e.dataTransfer.types.includes("application/x-lane")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const after = c.classList.contains("drop-after");
+    c.classList.remove("drop-before", "drop-after");
+    c.closest(".col").classList.remove("over");
+    dropOnCard(e.dataTransfer.getData("text/plain"), it, after);
+  };
   c.onclick = e => {
     if (e.target.closest("a,button,input,textarea")) return;
     expanded.has(it.key) ? expanded.delete(it.key) : expanded.add(it.key);
@@ -600,15 +635,36 @@ function addLaneColumn() {
   return wrap;
 }
 
+// Ops that move an item into a lane (and out of Done if it was there)
+function laneOps(laneId, it) {
+  const ops = [];
+  if (it.arch && !it.arch.revived) ops.push(del(["archived", it.key]));
+  else if (colOf(it).col === laneId) return ops;
+  if (it.kind === "task") ops.push(set(["tasks", it.t.id, "lane"], laneId));
+  else if (laneId === it.auto) ops.push(del(["placed", it.key]));
+  else ops.push(set(["placed", it.key], {col: laneId, at: it.at}));
+  return ops;
+}
+
 function dropOnLane(c, key) {
   const it = byKey.get(key);
   if (!it || it.parent) return;
   if (c.id === "done") return archive(it);
-  const ops = [];
-  if (it.arch) ops.push(del(["archived", it.key]));
-  if (it.kind === "task") ops.push(set(["tasks", it.t.id, "lane"], c.id));
-  else if (c.id === it.auto) ops.push(del(["placed", it.key]));
-  else ops.push(set(["placed", it.key], {col: c.id, at: it.at}));
+  commit(laneOps(c.id, it));
+}
+
+// Drop a card next to another card: move it into that lane and save the lane's order
+function dropOnCard(dragKeyValue, target, after) {
+  const drag = byKey.get(dragKeyValue);
+  if (!drag || drag.parent || drag.key === target.key) return;
+  const lane = colOf(target).col;
+  if (lane === "done") return archive(drag);
+  const ops = laneOps(lane, drag);
+  const shown = [...document.querySelectorAll(`.col[data-col="${lane}"] .card`)].map(n => n.dataset.key);
+  const hidden = ((state.order || {})[lane] || []).filter(k => !shown.includes(k));
+  const keys = shown.filter(k => k !== drag.key);
+  keys.splice(keys.indexOf(target.key) + (after ? 1 : 0), 0, drag.key);
+  ops.push(set(["order", lane], [...keys, ...hidden.filter(k => k !== drag.key)]));
   commit(ops);
 }
 
@@ -627,8 +683,11 @@ function renderBoard() {
   for (const c of all) {
     if (c.id === "done") board.appendChild(addLaneColumn());
     const list = groups[c.id];
+    // Your saved order wins; cards you haven't placed yet show first, by status then recency
+    const pos = new Map(((state.order || {})[c.id] || []).map((k, i) => [k, i]));
+    const p = it => pos.has(it.key) ? pos.get(it.key) : -1;
     if (c.id === "done") list.sort((a, b) => b[0].arch.when - a[0].arch.when);
-    else list.sort((a, b) => STATUS[a[0].status].rank - STATUS[b[0].status].rank || b[0].at - a[0].at);
+    else list.sort((a, b) => p(a[0]) - p(b[0]) || STATUS[a[0].status].rank - STATUS[b[0].status].rank || b[0].at - a[0].at);
     const col = el("section", "col");
     col.dataset.col = c.id;
     col.appendChild(laneHeader(c, list.length));
@@ -842,6 +901,9 @@ async function refresh() {
     lastSlack = sl.items || [];
     rebuildItems();
     render();
+    const home = document.getElementById("home");
+    home.hidden = !state.homeSession;
+    home.onclick = () => goTerminal({session_id: state.homeSession});
   } catch (_) {
     document.getElementById("meta").textContent = "server not reachable, run: python3 ~/timebox/server.py";
   }
