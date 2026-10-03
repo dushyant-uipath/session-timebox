@@ -33,6 +33,10 @@ Options:
 | `--days` | `14` | How far back to look for sessions |
 | `--allow-origin` | `https://dushyant-uipath.github.io` | Extra web origin allowed to call the server, repeatable |
 
+### Open it from GitHub Pages
+
+https://dushyant-uipath.github.io/session-timebox/ serves the same page and reads data from the server on `localhost:8765`, so the server must be running. Chrome asks once for permission to reach your local network; allow it. A fork hosted elsewhere needs its origin passed with `--allow-origin`.
+
 ### Link to the session that edits the board
 
 **Tweak this board in Claude** at the top switches to a chosen Claude session, or resumes it if it's closed. Set the session once:
