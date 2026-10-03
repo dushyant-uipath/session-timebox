@@ -68,7 +68,6 @@ color:var(--soft);font:500 13px -apple-system,sans-serif;cursor:pointer}
 .status{font-size:11px;font-weight:600;padding:1px 7px;border-radius:10px;color:#fff;background:var(--idle);text-transform:uppercase;letter-spacing:.03em}
 .status.needs{background:var(--accent)}
 .status.running{background:var(--run)}
-.status.waiting{background:var(--wait)}
 .status.task{background:var(--mine)}
 .kind{font-size:11px;font-weight:600;padding:1px 6px;border-radius:4px;background:var(--chip);color:var(--soft)}
 .kind.slack{background:var(--slack);color:#fff}
@@ -86,7 +85,6 @@ color:var(--soft);font:500 13px -apple-system,sans-serif;cursor:pointer}
 .next{margin-top:8px;padding:7px 9px;border-radius:6px;border-left:4px solid var(--accent);
 background:color-mix(in srgb,var(--accent) 13%,var(--card));font-weight:550;font-size:14.5px;line-height:1.35}
 .next::before{content:"NEXT";display:block;font-size:10.5px;font-weight:700;letter-spacing:.08em;color:var(--accent);margin-bottom:1px}
-.stale{color:var(--grey);font-size:12px;font-style:normal;font-weight:400}
 .subs{margin-top:8px;display:flex;flex-direction:column;gap:3px}
 .subs .lbl{font-size:10.5px;font-weight:700;letter-spacing:.08em;color:var(--grey);text-transform:uppercase}
 .srow{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:5px;background:var(--bg);font-size:13px;cursor:grab}
@@ -191,12 +189,12 @@ const DEFAULT_LANES = [
 ];
 // Cards with nowhere else to go land in these, so they can be renamed but not deleted
 const FIXED_LANES = new Set(["other", "done"]);
-const CATEGORY_COL = {critical_blocking: "critical", bug_fixing: "bugs", map_of_work: "map", other: "other"};
+// Slack items carry a category in slack.json; map it to a starting lane
+const SLACK_LANE = {critical_blocking: "critical", bug_fixing: "bugs", map_of_work: "map", other: "other"};
 const STATUS = {
   needs:   {label: "Needs you", rank: 0},
   task:    {label: "To-do",     rank: 0.5},
   running: {label: "Running",   rank: 1},
-  waiting: {label: "Waiting",   rank: 2},
   idle:    {label: "Idle",      rank: 3},
 };
 const DONE_KEEP = 86400, SUB_SHOW = 4;
@@ -264,10 +262,7 @@ const laneIds = () => new Set(lanes().map(l => l.id));
 // ---- items
 function sessionStatus(s) {
   if (s.live && s.live.status === "busy") return "running";
-  const w = s.ai && s.ai.waiting_on;
-  if (w === "you" || (!w && s.asks_you)) return "needs";
-  if (w === "ci_or_review" || w === "someone_else") return "waiting";
-  return "idle";
+  return s.asks_you ? "needs" : "idle";
 }
 
 // Archived means done; a session or agent comes back only if it has new messages after archiving
@@ -297,15 +292,13 @@ function rebuildItems() {
   const out = [], names = state.names || {};
   for (const s of lastSessions) {
     out.push({key: "s:" + s.session_id, kind: "session", s, at: s.active_at, revivable: true,
-      headline: names["s:" + s.session_id] || (s.ai && s.ai.headline) || s.title,
-      auto: CATEGORY_COL[s.ai && s.ai.category] || "other",
-      status: sessionStatus(s),
-      search: [s.title, s.repo, s.branch, s.first_ask, s.ai && s.ai.summary, s.ai && s.ai.headline, ...s.prs].join(" ")});
+      headline: names["s:" + s.session_id] || s.title, auto: "other", status: sessionStatus(s),
+      search: [s.title, s.repo, s.branch, s.first_ask, names["s:" + s.session_id], ...s.prs].join(" ")});
   }
   for (const m of lastSlack) {
     out.push({key: "k:" + m.id, kind: "slack", m, at: Number(m.ts) || now,
       headline: names["k:" + m.id] || m.headline || firstWords(m.ask, 5),
-      auto: CATEGORY_COL[m.category] || "other", status: "needs",
+      auto: SLACK_LANE[m.category] || "other", status: "needs",
       search: [m.who, m.where, m.summary, m.ask, m.headline].join(" ")});
   }
   for (const t of Object.values(state.tasks || {})) {
@@ -324,12 +317,12 @@ function rebuildItems() {
   }
 }
 
-// A drag holds until the item gets new activity after it; a deleted lane falls back to Others
+// A card stays in the lane you put it in; a deleted lane falls back to Others
 function colOf(it) {
   if (it.arch && !it.arch.revived) return {col: "done"};
   const ids = laneIds(), p = (state.placed || {})[it.key];
-  if (p && it.at <= p.at + 5 && ids.has(p.col)) return {col: p.col};
-  return {col: ids.has(it.auto) ? it.auto : "other", fresh: (!!p && it.kind !== "task") || !!(it.arch && it.arch.revived)};
+  if (p && ids.has(p.col)) return {col: p.col, fresh: !!(it.arch && it.arch.revived)};
+  return {col: ids.has(it.auto) ? it.auto : "other", fresh: !!(it.arch && it.arch.revived)};
 }
 const catOf = key => {
   const it = byKey.get(key);
@@ -485,7 +478,8 @@ function card(it, info) {
 
   if (it.kind === "session") {
     const s = it.s;
-    const sub = el("div", "sub", [s.title, s.repo, s.branch].filter(Boolean).join(" · "));
+    const renamed = (state.names || {})[it.key];
+    const sub = el("div", "sub", [renamed && s.title, s.repo, s.branch].filter(Boolean).join(" · "));
     if (s.live) {
       const lv = el("span", "live");
       lv.append(" · ", el("span", "dot" + (s.live.status === "busy" ? " busy" : "")),
@@ -493,14 +487,6 @@ function card(it, info) {
       sub.appendChild(lv);
     }
     c.appendChild(sub);
-    if (s.ai && s.ai.next_step) {
-      const nx = el("div", "next", s.ai.next_step);
-      if (s.ai.active_at < s.active_at || s.ai.v !== 2) nx.appendChild(el("span", "stale", " (updating…)"));
-      c.appendChild(nx);
-    } else {
-      c.appendChild(el("div", "sub", "Summarizing…"));
-    }
-    if (s.ai && s.ai.summary) detail.appendChild(el("p", null, s.ai.summary));
     const you = el("p"); you.append(el("b", null, "You: "), s.recent_asks.at(-1) || s.first_ask);
     const cl = el("p"); cl.append(el("b", null, "Claude: "), s.last_reply || "…");
     detail.append(you, cl);

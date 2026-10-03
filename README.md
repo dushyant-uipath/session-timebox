@@ -1,10 +1,10 @@
 # Session Timebox
 
-Running many Claude Code sessions across Terminal tabs makes it easy to lose track of which one is waiting on you, which one is mid-task, and what each is about. Session Timebox is a local board that reads your Claude Code sessions and Slack asks, sorts them by kind of work, and lets you drag them onto a 24-hour calendar to time-box the next few days.
+Running many Claude Code sessions across Terminal tabs makes it easy to lose track of which one is waiting on you, which one is mid-task, and what each is about. Session Timebox is a local board that reads your Claude Code sessions and Slack asks, lets you sort them into lanes, and lets you drag them onto a 24-hour calendar to time-box the next few days. It makes no model calls and uses no tokens.
 
 ## Run it
 
-Requirements: macOS, Python 3.9+, and the `claude` CLI logged in.
+Requirements: macOS, Python 3.9+, and Claude Code (its `claude` command is used to resume sessions in Terminal).
 
 ```sh
 git clone https://github.com/dushyant-uipath/session-timebox.git ~/timebox
@@ -72,9 +72,9 @@ Then load it with `launchctl load ~/Library/LaunchAgents/com.session-timebox.pli
 
 - **Sessions** come from `~/.claude/projects/*/*.jsonl` (`sessions_digest.py`). Subagent and temp sessions are skipped.
 - **Live status** comes from `~/.claude/sessions/<pid>.json`, which Claude Code writes for each running process: `busy`, `idle`, or `shell` (background command running).
-- **Summaries** come from `claude -p --model haiku` with hooks off and no session saved (`summarize` in `server.py`). Each session gets a 5-word headline, a summary, a next step, a work category, and who acts next. A session is re-summarized only after new messages, at roughly $0.006 per summary.
-- **Lanes** follow the work category: Critical & blocking, Iterative bug fixing, Map of work, Others. Dragging a card to another lane, or to Done, holds until that session has new activity. Dragging changes only the board; it never sends anything to the session.
-- **Status badges** show who acts next: Needs you, Running, Waiting (CI, review, or someone else), Idle.
+- **Cards** show the session title, or your own name for it. Click a card to see your last message and Claude's last reply.
+- **Lanes** start as Critical & blocking, Iterative bug fixing, Map of work, and Others. New sessions land in Others, and a card stays in whichever lane you drag it to. Dragging changes only the board; it never sends anything to the session.
+- **Status badges**: Running when Claude Code reports the process busy, Needs you when Claude's last reply ends with a question, otherwise Idle.
 - **Go to terminal** switches Terminal.app to the tab running that session, matched by its tty. A session that isn't running opens in a new tab with `claude --resume`. The first click asks macOS for permission to control Terminal.
 
 ## To-dos and lanes
@@ -94,8 +94,6 @@ Then load it with `launchctl load ~/Library/LaunchAgents/com.session-timebox.pli
 - Done keeps cards for 24 hours with a **Restore** button, then hides them for good.
 - A refresh keeps done cards in Done, and a Slack refresh skips them because they match by message timestamp.
 - A done session comes back, tagged "new activity", only if you send it new messages after marking it done.
-- Done sessions stop getting summaries.
-
 ## Subtasks
 
 - Session cards list the agent-team members working under that session, read from `<session>/subagents/*.jsonl` and their `.meta.json`, with each agent's latest assigned task.
@@ -139,12 +137,12 @@ The board reads Slack asks from `slack.json`. The Slack connector loads only in 
 
 ## Your data
 
-The server listens on `127.0.0.1` only and answers requests from `localhost` and the origins passed with `--allow-origin`; other web pages get `403`. Runtime files hold your session summaries, Slack asks, and calendar, and `.gitignore` keeps them out of the repository:
+The server listens on `127.0.0.1` only and answers requests from `localhost` and the origins passed with `--allow-origin`; other web pages get `403`. Runtime files hold your board, Slack asks, and calendar, and `.gitignore` keeps them out of the repository:
 
 | File | Contents |
 |---|---|
-| `timebox.db` | SQLite: session summaries, lanes, card order and names, to-dos, subtasks, placements, done cards, and time boxes |
+| `timebox.db` | SQLite: lanes, card order and names, to-dos, subtasks, placements, done cards, and time boxes |
 | `slack.json` | Slack asks |
 | `server.log` | Server output |
 
-The page sends each change as a small update (`POST /api/op`, applied in one SQLite transaction by `apply_ops` in `server.py`), so two open tabs don't overwrite each other. A `state.json` or `summaries.json` from an older version is imported into `timebox.db` on first start.
+The page sends each change as a small update (`POST /api/op`, applied in one SQLite transaction by `apply_ops` in `server.py`), so two open tabs don't overwrite each other. A `state.json` from an older version is imported into `timebox.db` on first start.

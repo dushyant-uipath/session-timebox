@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local session board: live sessions + summaries, Slack items, time boxes, jump-to-terminal.
+"""Local session board: live sessions, Slack items, time boxes, jump-to-terminal.
 Usage: server.py [--port 8765] [--days 14]"""
 import argparse
 import datetime as dt
@@ -7,7 +7,6 @@ import json
 import os
 import re
 import shlex
-import shutil
 import sqlite3
 import subprocess
 import threading
@@ -20,11 +19,9 @@ from sessions_digest import PROJECTS, SKIP_DIR_MARKERS, digest, subagent
 HERE = Path(__file__).resolve().parent
 STATE = HERE / "state.json"  # pre-SQLite storage, imported once
 DB = HERE / "timebox.db"
-SUMMARIES = HERE / "summaries.json"  # pre-SQLite storage, imported once
 SLACK = HERE / "slack.json"
 LIVE_DIR = Path.home() / ".claude" / "sessions"
 UUID = re.compile(r"^[0-9a-f-]{36}$")
-CLAUDE = shutil.which("claude") or "claude"
 
 _cache = {}  # transcript path -> (mtime, digest)
 _sub_cache = {}  # subagent transcript path -> (mtime, subagent)
@@ -48,16 +45,13 @@ def subtasks(session_path):
 def db():
     conn = sqlite3.connect(DB, timeout=10)
     conn.execute("CREATE TABLE IF NOT EXISTS state (section TEXT, key TEXT, value TEXT, PRIMARY KEY (section, key))")
-    conn.execute("CREATE TABLE IF NOT EXISTS summaries (session_id TEXT PRIMARY KEY, value TEXT)")
     return conn
 
 
-# Create the database, importing state.json and summaries.json from the pre-SQLite version on first run
+# Create the database, importing state.json from the pre-SQLite version on first run
 def init_db():
     with _state_lock, db() as conn:
-        if not conn.execute("SELECT COUNT(*) FROM summaries").fetchone()[0] and SUMMARIES.exists():
-            conn.executemany("INSERT OR REPLACE INTO summaries VALUES (?, ?)",
-                             [(sid, json.dumps(v)) for sid, v in read_json(SUMMARIES, {}).items()])
+        conn.execute("DROP TABLE IF EXISTS summaries")
         if conn.execute("SELECT COUNT(*) FROM state").fetchone()[0] or not STATE.exists():
             return
         for section, val in read_json(STATE, {}).items():
@@ -110,19 +104,6 @@ def read_json(path, default):
         return default
 
 
-_summaries = {}  # session_id -> summary, loaded from SQLite in main()
-
-
-def load_summaries():
-    with db() as conn:
-        return {sid: json.loads(v) for sid, v in conn.execute("SELECT session_id, value FROM summaries")}
-
-
-def save_summary(sid):
-    with db() as conn:
-        conn.execute("INSERT OR REPLACE INTO summaries VALUES (?, ?)", (sid, json.dumps(_summaries[sid])))
-
-
 def live_sessions():
     """Map session id -> {pid, status, tty} for claude processes that are still running."""
     out = {}
@@ -158,7 +139,6 @@ def sessions(days):
             if hit[1]:
                 s = dict(hit[1])
                 s["live"] = live.get(s["session_id"])
-                s["ai"] = _summaries.get(s["session_id"])
                 s["subtasks"] = subtasks(p)
                 out.append(s)
     out.sort(key=lambda d: d["active_at"], reverse=True)
@@ -166,67 +146,6 @@ def sessions(days):
         _latest.clear()
         _latest.update({s["session_id"]: s for s in out})
     return out
-
-
-SUMMARY_VERSION = 2
-SUMMARY_SCHEMA = json.dumps({
-    "type": "object",
-    "properties": {
-        "headline": {"type": "string"},
-        "summary": {"type": "string"},
-        "category": {"type": "string", "enum": ["critical_blocking", "bug_fixing", "map_of_work", "other"]},
-        "waiting_on": {"type": "string", "enum": ["you", "claude", "ci_or_review", "someone_else", "nothing"]},
-        "next_step": {"type": "string"},
-    },
-    "required": ["headline", "summary", "category", "waiting_on", "next_step"],
-})
-
-
-def summarize(s):
-    payload = {k: s[k] for k in ("title", "repo", "branch", "first_ask", "recent_asks", "last_reply")}
-    payload["prs"] = s["prs"][-3:]
-    prompt = ("headline: what this work is, 5 words or fewer, no filler. "
-              "summary: 1-2 plain sentences on what the work is and where it stands now. "
-              "category: critical_blocking = a customer, prod issue, release or teammate is blocked on it; "
-              "bug_fixing = iterative debugging, fixing bugs, CI failures or review-comment loops; "
-              "map_of_work = planning, architecture, design docs, scoping, or multi-repo feature building; "
-              "other = tooling, config, one-off questions. "
-              "waiting_on: who must act next (you = the engineer). "
-              "next_step: the one concrete next action, under 15 words. Session data: " + json.dumps(payload))
-    r = subprocess.run(
-        [CLAUDE, "-p", "--model", "haiku", "--tools", "", "--strict-mcp-config", "--disable-slash-commands",
-         "--no-session-persistence", "--settings", '{"disableAllHooks":true}',
-         "--system-prompt", "You summarize Claude Code sessions for a busy engineer. Plain English, short.",
-         "--output-format", "json", "--json-schema", SUMMARY_SCHEMA, prompt],
-        capture_output=True, text=True, timeout=180, cwd=HERE,
-    )
-    out = json.loads(r.stdout).get("structured_output")
-    if not out:
-        raise RuntimeError(r.stdout[-300:] or r.stderr[-300:])
-    return out
-
-
-def summary_worker():
-    while True:
-        archived = load_state().get("archived", {})
-        with _lock:
-            due = [s for s in _latest.values()
-                   if (s.get("live") or {}).get("status") != "busy"
-                   and s["active_at"] > (archived.get("s:" + s["session_id"]) or {}).get("at", 0) + 5
-                   and ((_summaries.get(s["session_id"]) or {}).get("active_at", 0) < s["active_at"]
-                        or (_summaries.get(s["session_id"]) or {}).get("v") != SUMMARY_VERSION)]
-        due.sort(key=lambda s: s["active_at"], reverse=True)
-        for s in due[:6]:
-            try:
-                out = summarize(s)
-                _summaries[s["session_id"]] = {**out, "active_at": s["active_at"], "at": time.time(),
-                                               "v": SUMMARY_VERSION}
-                save_summary(s["session_id"])
-            except Exception as e:  # keep the worker alive; retry on the next pass
-                print("summary failed", s["session_id"], e, flush=True)
-                _summaries.setdefault(s["session_id"], {}).update(active_at=s["active_at"], v=SUMMARY_VERSION)
-                save_summary(s["session_id"])
-        time.sleep(15)
 
 
 def osascript(lines, *args):
@@ -366,9 +285,7 @@ def main():
     Handler.days = a.days
     Handler.allowed_origins = {f"http://localhost:{a.port}", f"http://127.0.0.1:{a.port}", *a.allow_origin}
     init_db()
-    _summaries.update(load_summaries())
     sessions(a.days)
-    threading.Thread(target=summary_worker, daemon=True).start()
     print(f"Session board on http://localhost:{a.port}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", a.port), Handler).serve_forever()
 
