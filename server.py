@@ -154,6 +154,56 @@ def sessions(days):
     return out
 
 
+CAL_URL_FILE = HERE / "calendar.url"
+CAL_CACHE = HERE / "calendar.json"
+CAL_EVERY = 10 * 60
+CAL_DAYS = 8
+_calendar = read_json(CAL_CACHE, {"events": [], "fetched_at": None, "error": None})
+
+
+def iso_local(v):
+    if isinstance(v, dt.datetime):
+        return v.astimezone().replace(tzinfo=None).isoformat(timespec="minutes")
+    return v.isoformat()
+
+
+def fetch_calendar():
+    import icalendar
+    import recurring_ical_events
+    url = CAL_URL_FILE.read_text().strip()
+    r = subprocess.run(["curl", "-sfL", "--max-time", "300", url], capture_output=True, timeout=320)
+    if r.returncode:
+        raise RuntimeError(f"couldn't download the calendar (curl exit {r.returncode})")
+    cal = icalendar.Calendar.from_ical(r.stdout)
+    start = dt.datetime.combine(dt.date.today(), dt.time()).astimezone()
+    events = []
+    for e in recurring_ical_events.of(cal).between(start, start + dt.timedelta(days=CAL_DAYS)):
+        if str(e.get("STATUS", "")).upper() == "CANCELLED":
+            continue
+        s, f = e["DTSTART"].dt, (e.get("DTEND") or e["DTSTART"]).dt
+        events.append({
+            "uid": str(e.get("UID", "")),
+            "title": str(e.get("SUMMARY", "") or "Busy"),
+            "start": iso_local(s), "end": iso_local(f),
+            "allDay": not isinstance(s, dt.datetime),
+            "busy": str(e.get("X-MICROSOFT-CDO-BUSYSTATUS", "BUSY")).upper(),
+            "location": str(e.get("LOCATION", "") or ""),
+        })
+    return sorted(events, key=lambda e: e["start"])
+
+
+def calendar_worker():
+    while True:
+        if CAL_URL_FILE.exists():
+            try:
+                _calendar.update(events=fetch_calendar(), fetched_at=time.time(), error=None)
+                CAL_CACHE.write_text(json.dumps(_calendar))
+            except Exception as e:  # keep the last good copy; show the error on the board
+                _calendar["error"] = str(e)[:300]
+                print("calendar fetch failed:", e, flush=True)
+        time.sleep(CAL_EVERY)
+
+
 def cleanup_job(job, delay=0):
     # The session is usually still finishing its last turn when results arrive, so retry the removal
     def run():
@@ -319,6 +369,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, json.dumps(load_state()))
         elif self.path == "/api/slack":
             self.send(200, json.dumps({**read_json(SLACK, {"items": [], "synced_at": None}), "refresh": refresh_status()}))
+        elif self.path == "/api/calendar":
+            self.send(200, json.dumps({**_calendar, "configured": CAL_URL_FILE.exists()}))
         elif self.path == "/today.ics":
             self.send(200, ics(load_state()), "text/calendar")
         else:
@@ -354,6 +406,7 @@ def main():
     Handler.allowed_origins = {f"http://localhost:{a.port}", f"http://127.0.0.1:{a.port}", *a.allow_origin}
     init_db()
     sessions(a.days)
+    threading.Thread(target=calendar_worker, daemon=True).start()
     print(f"Session board on http://localhost:{a.port}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", a.port), Handler).serve_forever()
 

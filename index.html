@@ -144,6 +144,20 @@ background:var(--col);border-left:4px solid var(--other);cursor:move;user-select
 .box.sel{box-shadow:0 0 0 2px var(--accent)}
 .box.dragging{opacity:.75;box-shadow:0 4px 12px rgba(0,0,0,.25);z-index:5}
 .box.leaving{opacity:.35;outline:2px dashed var(--accent)}
+.box.beside{left:46%}
+.ev{position:absolute;border-radius:5px;padding:2px 16px 2px 6px;font-size:11.5px;line-height:1.2;overflow:hidden;
+background:color-mix(in srgb,var(--map) 20%,var(--card));border-left:3px solid var(--map);z-index:1;color:var(--ink);cursor:default}
+.ev.tent{background:color-mix(in srgb,var(--map) 7%,var(--card));border:1px dashed var(--map);border-left:3px dashed var(--map)}
+.ev.free{opacity:.45}
+.ev.oof{background:color-mix(in srgb,var(--slack) 22%,var(--card));border-left-color:var(--slack)}
+.ev .et{color:var(--soft);font-size:10.5px}
+.ev .eb{font-weight:600}
+.ev .ex{position:absolute;right:1px;top:1px;border:0;background:none;color:var(--grey);cursor:pointer;font-size:13px;display:none;padding:0 3px}
+.ev:hover .ex{display:block}
+.ev .ex:hover{color:var(--accent)}
+.adays{display:flex;flex-direction:column;gap:2px;margin-top:3px}
+.aday{font-size:10.5px;font-weight:500;background:color-mix(in srgb,var(--map) 20%,var(--card));border-radius:3px;padding:1px 5px;
+white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
 .box .t{color:var(--soft);font-size:11px}
 .box .bt{font-weight:600;outline:none}
 .box .x{position:absolute;right:2px;top:2px;width:18px;height:18px;border-radius:4px;cursor:pointer;border:0;
@@ -227,6 +241,7 @@ const ago = t => {
   if (d < 86400) return Math.floor(d / 3600) + "h";
   return Math.floor(d / 86400) + "d";
 };
+const agoText = t => ago(t) === "now" ? "just now" : ago(t) + " ago";
 const hhmm = m => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 const pretty = m => {
   m = ((m % DAY_MIN) + DAY_MIN) % DAY_MIN;
@@ -721,7 +736,7 @@ function renderSlackButton() {
     b.textContent = `Syncing Slack… ${ago(slackRefresh.started)}`;
     b.title = "A background Claude session is searching Slack; the board updates when it finishes";
   } else {
-    b.textContent = (slackSync ? `Slack synced ${ago(slackSync)} ago` : "Slack not synced yet") + " · ↻ Refresh";
+    b.textContent = (slackSync ? `Slack synced ${agoText(slackSync)}` : "Slack not synced yet") + " · ↻ Refresh";
     b.title = slackRefresh.error ? "Last refresh failed: " + slackRefresh.error : "Click to refresh Slack now";
   }
 }
@@ -734,6 +749,63 @@ async function startSlackRefresh() {
     toast(slackRefresh.running ? "Refreshing Slack in the background, this takes a few minutes"
                                : "Couldn't start the Slack refresh: " + (slackRefresh.error || "error"));
   } catch (_) { toast("Couldn't reach the server"); }
+}
+
+// ---- Outlook meetings (read-only, from the published ICS link the server polls)
+let calendar = {events: []};
+
+// Timed meetings that fall on this day, clipped at midnight and laid out side by side when they overlap
+function dayEvents(key) {
+  const hidden = state.hiddenEvents || {}, d0 = new Date(key + "T00:00"), out = [];
+  for (const e of calendar.events || []) {
+    if (e.allDay || hidden[e.uid]) continue;
+    const a = Math.max(0, (new Date(e.start) - d0) / 60000), b = Math.min(DAY_MIN, (new Date(e.end) - d0) / 60000);
+    if (b - a >= 1) out.push({e, a, b});
+  }
+  out.sort((x, y) => x.a - y.a || y.b - x.b);
+  let cluster = [], clusterEnd = -1;
+  const close = () => { const n = Math.max(...cluster.map(c => c.lane)) + 1; cluster.forEach(c => c.n = n); cluster = []; };
+  for (const ev of out) {
+    if (ev.a >= clusterEnd && cluster.length) close();
+    const used = new Set(cluster.filter(c => c.b > ev.a).map(c => c.lane));
+    ev.lane = 0;
+    while (used.has(ev.lane)) ev.lane++;
+    cluster.push(ev);
+    clusterEnd = Math.max(clusterEnd, ev.b);
+  }
+  if (cluster.length) close();
+  return out;
+}
+
+function allDayEvents(key) {
+  const hidden = state.hiddenEvents || {};
+  return (calendar.events || []).filter(e => e.allDay && !hidden[e.uid] && e.start <= key && key < e.end);
+}
+
+function eventEl(ev) {
+  const e = ev.e, n = el("div", "ev" + ({TENTATIVE: " tent", FREE: " free", OOF: " oof"}[e.busy] || ""));
+  n.style.top = ev.a * PX + "px";
+  n.style.height = Math.max((ev.b - ev.a) * PX - 1, 14) + "px";
+  n.style.left = `calc(${(ev.lane / ev.n) * 100}% + 2px)`;
+  n.style.width = `calc(${100 / ev.n}% - 4px)`;
+  const s = new Date(e.start), f = new Date(e.end), mins = d => d.getHours() * 60 + d.getMinutes();
+  n.append(el("div", "eb", e.title), el("div", "et", `${pretty(mins(s))}–${pretty(mins(f))}${e.location ? " · " + e.location : ""}`));
+  n.title = `${e.title}\n${pretty(mins(s))}–${pretty(mins(f))}${e.busy === "TENTATIVE" ? " (tentative)" : ""}${e.location ? "\n" + e.location : ""}`;
+  const x = el("button", "ex", "×");
+  x.title = "Hide this meeting (and its repeats) from the board";
+  x.onclick = ev2 => {
+    ev2.stopPropagation();
+    commit([set(["hiddenEvents", e.uid], e.title)]);
+    toast(`Hid “${e.title}”`, () => commit([del(["hiddenEvents", e.uid])]));
+  };
+  n.appendChild(x);
+  return n;
+}
+
+function calendarStatus() {
+  if (!calendar.configured) return "";
+  if (calendar.error && !calendar.fetched_at) return " · Outlook: " + calendar.error;
+  return calendar.fetched_at ? ` · Outlook synced ${agoText(calendar.fetched_at)}` : " · Outlook: first sync running…";
 }
 
 // ---- time boxes
@@ -754,8 +826,15 @@ function renderTimeline() {
   let total = 0;
   for (let i = 0; i < NDAYS; i++) {
     const key = dayKey(i), date = new Date(key + "T00:00");
-    days.appendChild(el("div", i === 0 ? "today" : null,
-      (i === 0 ? "Today · " : "") + date.toLocaleDateString([], {weekday: "short", month: "short", day: "numeric"})));
+    const head = el("div", i === 0 ? "today" : null,
+      (i === 0 ? "Today · " : "") + date.toLocaleDateString([], {weekday: "short", month: "short", day: "numeric"}));
+    const allDay = allDayEvents(key);
+    if (allDay.length) {
+      const wrap = el("div", "adays");
+      for (const e of allDay) Object.assign(wrap.appendChild(el("div", "aday", e.title)), {title: e.title + " (all day)"});
+      head.appendChild(wrap);
+    }
+    days.appendChild(head);
     const col = el("div", "daycol");
     col.dataset.date = key;
     for (let m = 30; m < DAY_MIN; m += 30) {
@@ -768,15 +847,19 @@ function renderTimeline() {
       n.style.top = nm * PX + "px";
       col.appendChild(n);
     }
+    const meetings = dayEvents(key);
+    for (const ev of meetings) col.appendChild(eventEl(ev));
     for (const b of Object.values(state.boxes || {}).filter(b => b.date === key)) {
       total += b.dur;
-      col.appendChild(boxEl(b));
+      const box = boxEl(b), s = toMin(b.start);
+      if (meetings.some(ev => ev.a < s + b.dur && ev.b > s)) box.classList.add("beside");
+      col.appendChild(box);
     }
     setupDayCol(col);
     grid.appendChild(col);
   }
   document.getElementById("boxsum").replaceChildren(
-    `${(total / 60).toFixed(1)}h boxed over the next ${NDAYS} days · drag cards or subtasks onto a time · `,
+    `${(total / 60).toFixed(1)}h boxed over the next ${NDAYS} days${calendarStatus()} · `,
     Object.assign(el("a", null, "export .ics"), {href: API + "/today.ics"}));
 }
 
@@ -890,7 +973,7 @@ function setupDayCol(col) {
     toast(`Boxed ${pretty(start)}–${pretty(start + dur)}`);
   };
   col.ondblclick = e => {
-    if (e.target.closest(".box")) return;
+    if (e.target.closest(".box,.ev")) return;
     const start = minuteAt(col, e), id = uid();
     commit([set(["boxes", id], {id, key: null, title: "Focus block", date: col.dataset.date, start: hhmm(start), dur: 30})]);
     const bt = [...document.querySelectorAll(`.daycol[data-date="${col.dataset.date}"] .box`)]
@@ -910,7 +993,9 @@ const typing = () => {
 async function refresh() {
   if (busyUI || typing()) return;
   try {
-    const [d, st, sl] = await Promise.all(["/api/sessions", "/api/state", "/api/slack"].map(u => fetch(API + u).then(r => r.json())));
+    const [d, st, sl, cal] = await Promise.all(["/api/sessions", "/api/state", "/api/slack", "/api/calendar"]
+      .map(u => fetch(API + u).then(r => r.json())));
+    calendar = cal || {events: []};
     if (busyUI || typing()) return;
     now = d.now;
     state = st || {};

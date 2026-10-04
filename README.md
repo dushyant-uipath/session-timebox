@@ -116,6 +116,30 @@ Then load it with `launchctl load ~/Library/LaunchAgents/com.session-timebox.pli
 - Drag the divider between the board and the calendar to resize the calendar. Use the Days buttons for 3, 5, or 7 days and the Zoom buttons for taller hours.
 - **Export .ics** downloads every block from today on, for import into Google Calendar.
 
+## Outlook meetings
+
+The calendar shows your Outlook meetings next to your time boxes, read-only, from Outlook's published ICS link. No tokens or sign-in are involved.
+
+1. In Outlook on the web: Settings → Calendar → Shared calendars → Publish a calendar → pick your calendar and "Can view all details" → Publish, then copy the ICS link.
+2. Save it where the server reads it, readable only by you:
+   ```sh
+   printf '%s' 'PASTE_ICS_LINK' > ~/timebox/calendar.url
+   chmod 600 ~/timebox/calendar.url
+   ```
+3. Install the two parsing libraries once, then restart the server:
+   ```sh
+   python3 -m pip install --user icalendar recurring-ical-events
+   ```
+
+The server downloads the feed every 10 minutes in the background (`calendar_worker` in `server.py`), expands recurring meetings for the next 8 days, and caches them in `calendar.json` so the board loads instantly after a restart. Outlook refreshes the published copy on its own schedule, so a just-booked meeting can take a while to appear.
+
+- Accepted meetings are solid, tentative ones dashed; overlapping meetings sit side by side.
+- All-day events show under the day name.
+- A time box that overlaps a meeting shifts right so both stay readable.
+- Hover a meeting and click **×** to hide it and its repeats (for example a recurring hold); Undo is offered for 5 seconds.
+
+Anyone with the ICS link can read your calendar; `calendar.url` and `calendar.json` are in `.gitignore`.
+
 ## Slack
 
 Click **Slack synced … · ↻ Refresh** in the header to refresh on demand. The server starts a background session (`claude --bg`, Sonnet, named `slack-refresh-<time>`) in `~/timebox` with the prompt in `slack_refresh.md`. It re-checks the items already listed, searches mentions, DM asks, and your own "I'll check / get back" messages since the last sync (8 days on the first run), opens each thread to drop resolved ones, and posts the result to `POST /api/slack`. The button shows "Syncing Slack…" until then, and the session is stopped and removed afterwards. Refresh sessions never appear on the board.
@@ -158,6 +182,8 @@ The server listens on `127.0.0.1` only and answers requests from `localhost` and
 |---|---|
 | `timebox.db` | SQLite: lanes, card order and names, to-dos, subtasks, placements, done cards, and time boxes |
 | `slack.json` | Slack asks |
+| `calendar.url` | Your private Outlook ICS link |
+| `calendar.json` | Cached meetings for the next 8 days |
 | `server.log` | Server output |
 
 The page sends each change as a small update (`POST /api/op`, applied in one SQLite transaction by `apply_ops` in `server.py`), so two open tabs don't overwrite each other. A `state.json` from an older version is imported into `timebox.db` on first start.

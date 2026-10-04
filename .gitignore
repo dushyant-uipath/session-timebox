@@ -3,6 +3,8 @@ timebox.db
 state.json
 summaries.json
 slack.json
+calendar.url
+calendar.json
 board.json
 server.log
 __pycache__/
