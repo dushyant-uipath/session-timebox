@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import threading
@@ -20,6 +21,11 @@ HERE = Path(__file__).resolve().parent
 STATE = HERE / "state.json"  # pre-SQLite storage, imported once
 DB = HERE / "timebox.db"
 SLACK = HERE / "slack.json"
+SLACK_PROMPT = HERE / "slack_refresh.md"
+HIDDEN_TITLES = ("slack-refresh", "slack-probe")  # background refresh sessions, kept off the board
+REFRESH_TIMEOUT = 20 * 60
+CLAUDE = shutil.which("claude") or "claude"
+_refresh = {"job": None, "started": 0, "error": None}
 LIVE_DIR = Path.home() / ".claude" / "sessions"
 UUID = re.compile(r"^[0-9a-f-]{36}$")
 
@@ -136,7 +142,7 @@ def sessions(days):
             hit = _cache.get(p)
             if not hit or hit[0] != m:
                 hit = _cache[p] = (m, digest(p))
-            if hit[1]:
+            if hit[1] and not hit[1]["title"].startswith(HIDDEN_TITLES):
                 s = dict(hit[1])
                 s["live"] = live.get(s["session_id"])
                 s["subtasks"] = subtasks(p)
@@ -146,6 +152,62 @@ def sessions(days):
         _latest.clear()
         _latest.update({s["session_id"]: s for s in out})
     return out
+
+
+def cleanup_job(job, delay=0):
+    # The session is usually still finishing its last turn when results arrive, so retry the removal
+    def run():
+        time.sleep(delay)
+        subprocess.run([CLAUDE, "stop", job], cwd=HERE, capture_output=True, timeout=60)
+        for _ in range(8):
+            if subprocess.run([CLAUDE, "rm", job], cwd=HERE, capture_output=True, timeout=60).returncode == 0:
+                return
+            time.sleep(20)
+    threading.Thread(target=run, daemon=True).start()
+
+
+def refresh_status():
+    if _refresh["job"] and time.time() - _refresh["started"] > REFRESH_TIMEOUT:
+        cleanup_job(_refresh["job"])
+        _refresh.update(job=None, error="Slack refresh timed out after 20 minutes")
+    return {"running": bool(_refresh["job"]), "started": _refresh["started"], "error": _refresh["error"]}
+
+
+def start_slack_refresh(port):
+    if _refresh["job"]:
+        return refresh_status()
+    cur = read_json(SLACK, {"items": [], "synced_at": None})
+    state = load_state()
+    now = time.time()
+    since = max((cur.get("synced_at") or 0) - 86400, now - 8 * 86400)
+    day = lambda t: dt.date.fromtimestamp(t).isoformat()
+    existing = "\n".join(f"- {i['id']} | {i.get('who')} | {i.get('where')} | {i.get('headline')} | {i.get('url')}"
+                         for i in cur.get("items", [])) or "(none)"
+    skip = ", ".join(k[2:] for k in state.get("archived", {}) if k.startswith("k:")) or "(none)"
+    prompt = SLACK_PROMPT.read_text()
+    for k, v in {"USER_ID": state.get("slackUser", ""), "TODAY": day(now), "SINCE": day(since),
+                 "SINCE_MINUS_1": day(since - 86400), "EXISTING": existing, "SKIP": skip, "PORT": str(port)}.items():
+        prompt = prompt.replace("{{" + k + "}}", v)
+    r = subprocess.run([CLAUDE, "--bg", "-n", f"slack-refresh-{int(now)}", "--model", "sonnet",
+                        "--permission-mode", "bypassPermissions", prompt],
+                       cwd=HERE, capture_output=True, text=True, timeout=90)
+    m = re.search(r"backgrounded\W+(\w+)", r.stdout)
+    if not m:
+        _refresh.update(job=None, error=(r.stderr or r.stdout).strip()[-300:] or "couldn't start claude --bg")
+    else:
+        _refresh.update(job=m.group(1), started=now, error=None)
+    return refresh_status()
+
+
+def receive_slack(body):
+    items = body.get("items")
+    if not isinstance(items, list) or not all(isinstance(i, dict) and i.get("id") for i in items):
+        return {"ok": False, "error": "items must be a list of objects with an id"}
+    SLACK.write_text(json.dumps({"synced_at": time.time(), "items": items}, indent=1))
+    if _refresh["job"]:
+        cleanup_job(_refresh["job"], delay=30)
+        _refresh.update(job=None, error=None)
+    return {"ok": True, "items": len(items)}
 
 
 def osascript(lines, *args):
@@ -211,6 +273,7 @@ def ics(state):
 
 class Handler(BaseHTTPRequestHandler):
     days = 14
+    port = 8765
     allowed_origins = set()
 
     def origin_ok(self):
@@ -255,7 +318,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/state":
             self.send(200, json.dumps(load_state()))
         elif self.path == "/api/slack":
-            self.send(200, json.dumps(read_json(SLACK, {"items": [], "synced_at": None})))
+            self.send(200, json.dumps({**read_json(SLACK, {"items": [], "synced_at": None}), "refresh": refresh_status()}))
         elif self.path == "/today.ics":
             self.send(200, ics(load_state()), "text/calendar")
         else:
@@ -266,6 +329,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send(403, "{}")
         elif self.path == "/api/op":
             self.send(200, json.dumps(apply_ops(self.body().get("ops", []))))
+        elif self.path == "/api/slack":
+            self.send(200, json.dumps(receive_slack(self.body())))
+        elif self.path == "/api/slack/refresh":
+            self.send(200, json.dumps(start_slack_refresh(self.port)))
         elif self.path == "/api/focus":
             self.send(200, json.dumps(focus(self.body().get("session_id"))))
         else:
@@ -283,6 +350,7 @@ def main():
                     help="extra web origin allowed to use this server (e.g. a GitHub Pages site)")
     a = ap.parse_args()
     Handler.days = a.days
+    Handler.port = a.port
     Handler.allowed_origins = {f"http://localhost:{a.port}", f"http://127.0.0.1:{a.port}", *a.allow_origin}
     init_db()
     sessions(a.days)

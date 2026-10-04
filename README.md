@@ -1,6 +1,6 @@
 # Session Timebox
 
-Running many Claude Code sessions across Terminal tabs makes it easy to lose track of which one is waiting on you, which one is mid-task, and what each is about. Session Timebox is a local board that reads your Claude Code sessions and Slack asks, lets you sort them into lanes, and lets you drag them onto a 24-hour calendar to time-box the next few days. It makes no model calls and uses no tokens.
+Running many Claude Code sessions across Terminal tabs makes it easy to lose track of which one is waiting on you, which one is mid-task, and what each is about. Session Timebox is a local board that reads your Claude Code sessions and Slack asks, lets you sort them into lanes, and lets you drag them onto a 24-hour calendar to time-box the next few days. It makes no model calls on its own; the only token use is the Slack refresh, and only when you click it.
 
 ## Run it
 
@@ -118,7 +118,17 @@ Then load it with `launchctl load ~/Library/LaunchAgents/com.session-timebox.pli
 
 ## Slack
 
-The board reads Slack asks from `slack.json`. The Slack connector loads only in interactive Claude Code sessions, so refresh this file from one by asking Claude to find unanswered Slack mentions and DMs and write them to `~/timebox/slack.json` in this format:
+Click **Slack synced … · ↻ Refresh** in the header to refresh on demand. The server starts a background session (`claude --bg`, Sonnet, named `slack-refresh-<time>`) in `~/timebox` with the prompt in `slack_refresh.md`. It re-checks the items already listed, searches mentions, DM asks, and your own "I'll check / get back" messages since the last sync (8 days on the first run), opens each thread to drop resolved ones, and posts the result to `POST /api/slack`. The button shows "Syncing Slack…" until then, and the session is stopped and removed afterwards. Refresh sessions never appear on the board.
+
+One-time setup: `~/timebox` must be a trusted folder (run `claude` there once and accept), because `claude --bg` refuses untrusted folders. Optionally save your Slack user ID so refreshes skip looking it up:
+
+```sh
+curl -X POST -d '{"ops":[{"path":["slackUser"],"value":"U0XXXXXXX"}]}' http://localhost:8765/api/op
+```
+
+Each refresh uses tokens (a background Sonnet session searching and reading threads); nothing runs unless you click. Cards from your own promises get a **You promised** tag.
+
+The board reads Slack items from `slack.json`, which any Claude session can also write directly in this format:
 
 ```json
 {
@@ -131,6 +141,7 @@ The board reads Slack asks from `slack.json`. The Slack connector loads only in 
       "headline": "Five words or fewer",
       "summary": "One sentence on what it is about.",
       "ask": "What they want from you",
+      "kind": "ask | commitment",
       "category": "critical_blocking | bug_fixing | map_of_work | other",
       "url": "https://...slack.com/archives/...",
       "ts": "1790957704"

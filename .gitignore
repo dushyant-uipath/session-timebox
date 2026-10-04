@@ -6,4 +6,6 @@ slack.json
 board.json
 server.log
 __pycache__/
+# Worktrees created by background Claude sessions
+.claude/
 .DS_Store

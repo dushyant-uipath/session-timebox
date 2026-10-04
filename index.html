@@ -17,6 +17,12 @@ display:flex;flex-direction:column}
 header{display:flex;align-items:center;gap:16px;padding:12px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 h1{font-size:18px;margin:0;font-weight:600}
 .meta{color:var(--soft);font-size:13px}
+.slackbtn{border:1px solid var(--line);background:transparent;color:var(--soft);border-radius:14px;padding:3px 10px;
+font:500 12.5px -apple-system,sans-serif;cursor:pointer}
+.slackbtn:hover{border-color:var(--slack);color:var(--ink)}
+.slackbtn.syncing{border-color:var(--slack);color:var(--slack);cursor:progress}
+.slackbtn.err{border-color:var(--accent);color:var(--accent)}
+.tag.promise{background:color-mix(in srgb,var(--slack) 22%,var(--card));color:var(--ink)}
 .go.home{margin-left:0;padding:6px 12px;font-size:13px;border-color:var(--accent);color:var(--accent)}
 .go.home:hover{background:var(--accent);color:#fff}
 .card.drop-before{box-shadow:0 -3px 0 var(--accent)}
@@ -157,7 +163,7 @@ padding:7px 13px;border-radius:6px;opacity:0;transition:opacity .2s;z-index:9;fo
 <header>
   <h1>Session Board</h1>
   <span class="meta" id="meta">loading…</span>
-  <span class="meta" id="slackmeta"></span>
+  <button class="slackbtn" id="slackmeta" title="Click to refresh Slack now"></button>
   <input type="search" id="q" placeholder="Filter by title, repo, PR…">
   <button class="go home" id="home" hidden title="Switch to the Claude session that builds this board, or resume it if it's closed">Tweak this board in Claude</button>
 </header>
@@ -512,6 +518,7 @@ function card(it, info) {
     const m = it.m;
     c.appendChild(el("div", "sub", [m.who, m.where].filter(Boolean).join(" · ")));
     c.appendChild(el("div", "next", m.ask));
+    if (m.kind === "commitment") tags.appendChild(el("span", "tag promise", "You promised"));
     detail.appendChild(el("p", null, m.summary));
     if (m.url && m.url.startsWith("https://")) {
       const a = el("a", "go", "Open in Slack");
@@ -701,7 +708,32 @@ function renderBoard() {
     `${live.filter(i => i.kind === "session").length} sessions · ${running} running · ${needs} need you · ` +
     `updated ${new Date().toLocaleTimeString([], {hour: "numeric", minute: "2-digit"})}`;
   document.title = needs ? `(${needs}) Session Board` : "Session Board";
-  document.getElementById("slackmeta").textContent = slackSync ? `Slack synced ${ago(slackSync)} ago` : "Slack not synced yet";
+  renderSlackButton();
+}
+
+// ---- Slack refresh: the server starts a background Claude session that posts fresh items back
+let slackRefresh = {running: false};
+function renderSlackButton() {
+  const b = document.getElementById("slackmeta");
+  b.classList.toggle("syncing", !!slackRefresh.running);
+  b.classList.toggle("err", !slackRefresh.running && !!slackRefresh.error);
+  if (slackRefresh.running) {
+    b.textContent = `Syncing Slack… ${ago(slackRefresh.started)}`;
+    b.title = "A background Claude session is searching Slack; the board updates when it finishes";
+  } else {
+    b.textContent = (slackSync ? `Slack synced ${ago(slackSync)} ago` : "Slack not synced yet") + " · ↻ Refresh";
+    b.title = slackRefresh.error ? "Last refresh failed: " + slackRefresh.error : "Click to refresh Slack now";
+  }
+}
+
+async function startSlackRefresh() {
+  if (slackRefresh.running) return;
+  try {
+    slackRefresh = await fetch(API + "/api/slack/refresh", {method: "POST"}).then(r => r.json());
+    renderSlackButton();
+    toast(slackRefresh.running ? "Refreshing Slack in the background, this takes a few minutes"
+                               : "Couldn't start the Slack refresh: " + (slackRefresh.error || "error"));
+  } catch (_) { toast("Couldn't reach the server"); }
 }
 
 // ---- time boxes
@@ -882,7 +914,9 @@ async function refresh() {
     if (busyUI || typing()) return;
     now = d.now;
     state = st || {};
+    if (slackSync && sl.synced_at && sl.synced_at !== slackSync) toast(`Slack updated: ${(sl.items || []).length} open items`);
     slackSync = sl.synced_at;
+    slackRefresh = sl.refresh || {running: false};
     lastSessions = d.sessions;
     lastSlack = sl.items || [];
     rebuildItems();
@@ -952,6 +986,7 @@ function setupControls() {
 }
 
 document.getElementById("q").oninput = renderBoard;
+document.getElementById("slackmeta").onclick = startSlackRefresh;
 setupControls();
 refresh().then(() => {
   const d = new Date();
