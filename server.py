@@ -128,8 +128,27 @@ def live_sessions():
     return out
 
 
+# Session ids you've touched on the board (placed, renamed, ordered, time-boxed, subtasks);
+# these stay listed past the age cutoff, even after their process is gone
+def tracked_sessions(state):
+    keys = set(state.get("placed", {})) | set(state.get("names", {})) | set(state.get("subs", {}))
+    for order in state.get("order", {}).values():
+        keys.update(order)
+    for b in state.get("boxes", {}).values():
+        if b.get("key"):
+            keys.add(b["key"])
+    out = set()
+    for k in keys:
+        if k.startswith("s:"):
+            out.add(k[2:])
+        elif k.startswith("a:"):
+            out.add(k.split(":")[1])
+    return out
+
+
 def sessions(days):
     cutoff = time.time() - days * 86400
+    kept = tracked_sessions(load_state())
     live = live_sessions()
     out = []
     for proj in PROJECTS.iterdir():
@@ -137,7 +156,7 @@ def sessions(days):
             continue
         for p in proj.glob("*.jsonl"):
             m = p.stat().st_mtime
-            if m < cutoff and p.stem not in live:
+            if m < cutoff and p.stem not in live and p.stem not in kept:
                 continue
             hit = _cache.get(p)
             if not hit or hit[0] != m:
